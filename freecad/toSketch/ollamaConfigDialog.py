@@ -18,12 +18,21 @@ from .ollamaClient import (
 class OllamaConfigDialog(QtWidgets.QDialog):
     """Full configuration dialog for Ollama AI integration."""
 
+    _sig_connection_result = QtCore.Signal(bool, int)
+    _sig_models_loaded = QtCore.Signal(list)
+    _sig_model_info_loaded = QtCore.Signal(dict)
+    _sig_test_result = QtCore.Signal(bool, str)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Ollama AI Configuration")
         self.setMinimumSize(600, 520)
         self._model_details = {}
         self._model_details_lock = threading.Lock()
+        self._sig_connection_result.connect(self._on_connection_result)
+        self._sig_models_loaded.connect(self._on_models_loaded)
+        self._sig_model_info_loaded.connect(self._on_model_info_loaded)
+        self._sig_test_result.connect(self._on_test_result)
         self._build_ui()
         self._load_preferences()
         self._check_connection()
@@ -241,16 +250,11 @@ class OllamaConfigDialog(QtWidgets.QDialog):
             prefs = {"url": self.txt_url.text().strip() or _DEFAULTS["url"]}
             ok = check_ollama_available(prefs)
             models = list_ollama_models(prefs) if ok else []
-            QtCore.QMetaObject.invokeMethod(
-                self, "_on_connection_result",
-                QtCore.Qt.QueuedConnection,
-                QtCore.Q_ARG(bool, ok),
-                QtCore.Q_ARG(int, len(models)))
+            self._sig_connection_result.emit(ok, len(models))
 
         t = threading.Thread(target=_check, daemon=True)
         t.start()
 
-    @QtCore.Slot(bool, int)
     def _on_connection_result(self, ok, model_count):
         if ok:
             self._set_connection_status(
@@ -281,15 +285,11 @@ class OllamaConfigDialog(QtWidgets.QDialog):
         def _load():
             prefs = {"url": self.txt_url.text().strip() or _DEFAULTS["url"]}
             models = list_ollama_models(prefs)
-            QtCore.QMetaObject.invokeMethod(
-                self, "_on_models_loaded",
-                QtCore.Qt.QueuedConnection,
-                QtCore.Q_ARG(list, models))
+            self._sig_models_loaded.emit(models)
 
         t = threading.Thread(target=_load, daemon=True)
         t.start()
 
-    @QtCore.Slot(list)
     def _on_models_loaded(self, models):
         current = self.combo_model.currentText()
         self.combo_model.clear()
@@ -323,15 +323,11 @@ class OllamaConfigDialog(QtWidgets.QDialog):
             info = get_model_info(model_name, prefs)
             with self._model_details_lock:
                 self._model_details[model_name] = info
-            QtCore.QMetaObject.invokeMethod(
-                self, "_on_model_info_loaded",
-                QtCore.Qt.QueuedConnection,
-                QtCore.Q_ARG(dict, info))
+            self._sig_model_info_loaded.emit(info)
 
         t = threading.Thread(target=_load, daemon=True)
         t.start()
 
-    @QtCore.Slot(dict)
     def _on_model_info_loaded(self, info):
         self._show_model_info(info)
 
@@ -404,16 +400,11 @@ class OllamaConfigDialog(QtWidgets.QDialog):
             )
             result = query_ollama(test_prompt, prefs)
             success = result is not None and isinstance(result, dict)
-            QtCore.QMetaObject.invokeMethod(
-                self, "_on_test_result",
-                QtCore.Qt.QueuedConnection,
-                QtCore.Q_ARG(bool, success),
-                QtCore.Q_ARG(str, str(result) if result else "No response"))
+            self._sig_test_result.emit(success, str(result) if result else "No response")
 
         t = threading.Thread(target=_run, daemon=True)
         t.start()
 
-    @QtCore.Slot(bool, str)
     def _on_test_result(self, success, detail):
         if success:
             self.lbl_test_result.setText("OK — model responds correctly")

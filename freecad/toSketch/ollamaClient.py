@@ -204,6 +204,9 @@ def query_ollama(prompt, prefs=None):
         with urllib.request.urlopen(req, timeout=prefs["timeout"]) as resp:
             data = json.loads(resp.read().decode())
             response_text = data.get("response", "")
+            # Some models (e.g. Qwen3.5) put content in "thinking" field
+            if not response_text and "thinking" in data:
+                response_text = data["thinking"]
             return json.loads(response_text)
     except (urllib.error.URLError, urllib.error.HTTPError):
         return None
