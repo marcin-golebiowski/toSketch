@@ -9,7 +9,7 @@ import urllib.error
 _DEFAULTS = {
     "url": "http://localhost:11434",
     "model": "llama3.2",
-    "timeout": 60,
+    "timeout": 360,
     "enabled": True,
     "temperature": 0.3,
     "system_prompt": (
@@ -201,18 +201,34 @@ def query_ollama(prompt, prefs=None):
         headers={"Content-Type": "application/json"})
 
     try:
-        with urllib.request.urlopen(req, timeout=prefs["timeout"]) as resp:
-            data = json.loads(resp.read().decode())
-            response_text = data.get("response", "")
-            # Some models (e.g. Qwen3.5) put content in "thinking" field
-            if not response_text and "thinking" in data:
-                response_text = data["thinking"]
-            return json.loads(response_text)
-    except (urllib.error.URLError, urllib.error.HTTPError):
-        return None
-    except (json.JSONDecodeError, KeyError, TypeError):
-        return None
+        import FreeCAD as _fc
+        _log = _fc.Console.PrintMessage
+        _warn = _fc.Console.PrintWarning
     except Exception:
+        _log = _warn = lambda m: None
+
+    _log(f"[Ollama] POST {url} model={body['model']}\n")
+    try:
+        with urllib.request.urlopen(req, timeout=prefs["timeout"]) as resp:
+            raw = resp.read().decode()
+            data = json.loads(raw)
+            response_text = data.get("response", "")
+            thinking_text = data.get("thinking", "")
+            # Some models (e.g. Qwen3.5) put content in "thinking" field
+            if not response_text and thinking_text:
+                response_text = thinking_text
+            _log(f"[Ollama] Response: {response_text[:500]}\n")
+            if thinking_text:
+                _log(f"[Ollama] Thinking: {thinking_text[:500]}\n")
+            return json.loads(response_text)
+    except (urllib.error.URLError, urllib.error.HTTPError) as e:
+        _warn(f"[Ollama] Connection error: {e}\n")
+        return None
+    except json.JSONDecodeError as e:
+        _warn(f"[Ollama] JSON parse error: {e}\n")
+        return None
+    except Exception as e:
+        _warn(f"[Ollama] Error: {e}\n")
         return None
 
 

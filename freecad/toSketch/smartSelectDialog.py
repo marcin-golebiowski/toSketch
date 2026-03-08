@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """PySide2 dialog for AI-assisted smart face selection."""
+import json
 import threading
 
 from PySide import QtCore, QtGui
@@ -64,6 +65,7 @@ class OllamaWorker(QtCore.QThread):
     """Background thread for Ollama queries."""
     finished = QtCore.Signal(object)
     error = QtCore.Signal(str)
+    raw_response = QtCore.Signal(str)
 
     def __init__(self, prompt, prefs, parent=None):
         super().__init__(parent)
@@ -71,10 +73,79 @@ class OllamaWorker(QtCore.QThread):
         self.prefs = prefs
 
     def run(self):
+        import urllib.request
         try:
-            result = query_ollama(self.prompt, self.prefs)
-            self.finished.emit(result)
+            url = self.prefs["url"].rstrip("/") + "/api/generate"
+            body = {
+                "model": self.prefs["model"],
+                "prompt": self.prompt,
+                "stream": True,
+                "format": "json",
+            }
+            system_prompt = self.prefs.get("system_prompt", "")
+            if system_prompt:
+                body["system"] = system_prompt
+            temperature = self.prefs.get("temperature")
+            if temperature is not None:
+                body["options"] = {"temperature": temperature}
+
+            payload = json.dumps(body).encode("utf-8")
+            req = urllib.request.Request(
+                url, data=payload, method="POST",
+                headers={"Content-Type": "application/json"})
+
+            self.raw_response.emit(f">>> POST {url}\n>>> Model: {body['model']}\n")
+            self.raw_response.emit(f">>> Prompt:\n{self.prompt}\n\n")
+
+            timeout = self.prefs.get("timeout", 60)
+            face_count = self.prompt.count("Face ")
+            timeout = max(timeout, 60 + face_count * 2)
+            self.raw_response.emit(f">>> Timeout: {timeout}s ({face_count} faces)\n\n")
+
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                response_text = ""
+                thinking_text = ""
+                in_thinking = False
+
+                for line in resp:
+                    line = line.decode().strip()
+                    if not line:
+                        continue
+                    chunk = json.loads(line)
+
+                    # Thinking content (streamed)
+                    think_chunk = chunk.get("thinking", "")
+                    if think_chunk:
+                        if not in_thinking:
+                            self.raw_response.emit("<<< Thinking:\n")
+                            in_thinking = True
+                        self.raw_response.emit(think_chunk)
+                        thinking_text += think_chunk
+
+                    # Response content (streamed)
+                    resp_chunk = chunk.get("response", "")
+                    if resp_chunk:
+                        if in_thinking:
+                            self.raw_response.emit("\n\n<<< Response:\n")
+                            in_thinking = False
+                        elif not response_text:
+                            self.raw_response.emit("<<< Response:\n")
+                        self.raw_response.emit(resp_chunk)
+                        response_text += resp_chunk
+
+                    if chunk.get("done"):
+                        break
+
+                self.raw_response.emit("\n\n>>> Done.\n")
+
+                # Parse final result
+                final_text = response_text
+                if not final_text and thinking_text:
+                    final_text = thinking_text
+                result = json.loads(final_text) if final_text else None
+                self.finished.emit(result)
         except Exception as e:
+            self.raw_response.emit(f"\n!!! Error: {e}\n")
             self.error.emit(str(e))
 
 
@@ -145,7 +216,34 @@ class SmartSelectDialog(QtWidgets.QDialog):
         ai_layout.addWidget(self.lbl_description, 0, 1)
         ai_layout.addWidget(lbl_strat, 1, 0)
         ai_layout.addWidget(self.lbl_strategy, 1, 1)
-        ai_layout.addWidget(self.lbl_status, 2, 0, 1, 2)
+
+        # Context input for additional info
+        lbl_context = QtWidgets.QLabel("Context:")
+        lbl_context.setStyleSheet("font-weight: bold; color: #666;")
+        ai_layout.addWidget(lbl_context, 2, 0, QtCore.Qt.AlignTop)
+
+        self.txt_ai_context = QtWidgets.QLineEdit()
+        self.txt_ai_context.setPlaceholderText(
+            "Optional: describe the part, e.g. 'bearing housing', 'gear mount plate'...")
+        self.txt_ai_context.setStyleSheet(
+            "QLineEdit { border: 1px solid #ccc; border-radius: 3px; "
+            "padding: 4px 6px; font-size: 11px; }")
+        ai_layout.addWidget(self.txt_ai_context, 2, 1)
+
+        # Analyze button + status on same row
+        ai_btn_row = QtWidgets.QHBoxLayout()
+        self.btn_analyze_ai = QtWidgets.QPushButton("Analyze with AI")
+        self.btn_analyze_ai.setStyleSheet(
+            "QPushButton { background: #2980b9; color: white; padding: 4px 14px; "
+            "border-radius: 3px; font-size: 11px; font-weight: bold; }"
+            "QPushButton:hover { background: #3498db; }"
+            "QPushButton:disabled { background: #bdc3c7; }")
+        self.btn_analyze_ai.clicked.connect(self._on_analyze_ai_clicked)
+        ai_btn_row.addWidget(self.btn_analyze_ai)
+        ai_btn_row.addWidget(self.lbl_status)
+        ai_btn_row.addStretch()
+        ai_layout.addLayout(ai_btn_row, 3, 0, 1, 2)
+
         ai_layout.setColumnStretch(1, 1)
 
         layout.addWidget(ai_group)
@@ -201,8 +299,8 @@ class SmartSelectDialog(QtWidgets.QDialog):
             "QTableWidget { gridline-color: #ddd; font-size: 12px; }"
             "QTableWidget::item { padding: 2px 6px; }"
             "QTableWidget::item:selected { background: #d4e6f9; color: #000; }"
-            "QHeaderView::section { background: #f5f5f5; border: 1px solid #ddd; "
-            "padding: 4px 6px; font-weight: bold; font-size: 11px; }"
+            "QHeaderView::section { background: #e0e0e0; border: 1px solid #bbb; "
+            "padding: 4px 6px; font-weight: bold; font-size: 11px; color: #333; }"
         )
         header = self.table.horizontalHeader()
         header.setStretchLastSection(True)
@@ -211,14 +309,29 @@ class SmartSelectDialog(QtWidgets.QDialog):
         header.setSectionResizeMode(self.COL_SCORE, QtWidgets.QHeaderView.Fixed)
         header.resizeSection(self.COL_SCORE, 80)
 
+        self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self.table.horizontalHeader().setVisible(True)
         self.table.verticalHeader().setVisible(False)
+        self.table.itemSelectionChanged.connect(self._on_table_selection_changed)
         self.table.verticalHeader().setDefaultSectionSize(26)
         self.table.setMouseTracking(True)
         self.table.cellEntered.connect(self._on_hover)
         self.table.cellDoubleClicked.connect(self._on_double_click)
         self.table.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._show_context_menu)
-        layout.addWidget(self.table, 1)  # stretch factor = 1
+        # ── Tab Widget: Faces + Ollama Log ──
+        self.tabs = QtWidgets.QTabWidget()
+        self.tabs.addTab(self.table, "Faces")
+
+        self.txt_ollama_log = QtWidgets.QPlainTextEdit()
+        self.txt_ollama_log.setReadOnly(True)
+        self.txt_ollama_log.setStyleSheet(
+            "QPlainTextEdit { font-family: monospace; font-size: 11px; "
+            "background: #1e1e1e; color: #d4d4d4; border: none; }")
+        self.txt_ollama_log.setPlaceholderText("Ollama responses will appear here...")
+        self.tabs.addTab(self.txt_ollama_log, "Ollama Log")
+
+        layout.addWidget(self.tabs, 1)  # stretch factor = 1
 
         # ── Button Row ──
         btn_layout = QtWidgets.QHBoxLayout()
@@ -415,11 +528,14 @@ class SmartSelectDialog(QtWidgets.QDialog):
         self._populate_table()
         self._apply_threshold(self.spin_threshold.value())
         self._update_summary()
+        self._set_status("Algorithmic analysis complete. Click 'Analyze with AI' for AI scoring.", "#888")
 
-        if self.chk_ai.isChecked():
-            self._start_ollama_query()
-        else:
-            self._set_status("AI disabled — algorithmic scoring only", "#888")
+    def _on_analyze_ai_clicked(self):
+        if not self.analysis:
+            return
+        if not self.chk_ai.isChecked():
+            self.chk_ai.setChecked(True)
+        self._start_ollama_query()
 
     def _start_ollama_query(self):
         prefs = get_preferences()
@@ -429,18 +545,25 @@ class SmartSelectDialog(QtWidgets.QDialog):
                 "Ollama unavailable \u2014 using algorithmic results only", "#e67e22")
             return
 
+        self.btn_analyze_ai.setEnabled(False)
         self._set_status(
             f"Querying Ollama ({prefs['model']})...", "#2980b9")
         self.progress.setVisible(True)
 
         prompt = build_prompt(self.analysis.faces, self.analysis.groups)
+        context = self.txt_ai_context.text().strip()
+        if context:
+            prompt = f"Additional context about this part: {context}\n\n{prompt}"
         self.worker = OllamaWorker(prompt, prefs)
         self.worker.finished.connect(self._on_ollama_finished)
         self.worker.error.connect(self._on_ollama_error)
+        self.worker.raw_response.connect(self._on_ollama_raw)
+        self.txt_ollama_log.clear()
         self.worker.start()
 
     def _on_ollama_finished(self, result):
         self.progress.setVisible(False)
+        self.btn_analyze_ai.setEnabled(True)
         if result:
             strategy = apply_ollama_annotations(
                 self.analysis.faces, result)
@@ -460,8 +583,16 @@ class SmartSelectDialog(QtWidgets.QDialog):
         else:
             self._set_status("Ollama returned no results", "#e74c3c")
 
+    def _on_ollama_raw(self, text):
+        cursor = self.txt_ollama_log.textCursor()
+        cursor.movePosition(QtGui.QTextCursor.End)
+        cursor.insertText(text)
+        self.txt_ollama_log.setTextCursor(cursor)
+        self.txt_ollama_log.ensureCursorVisible()
+
     def _on_ollama_error(self, error_msg):
         self.progress.setVisible(False)
+        self.btn_analyze_ai.setEnabled(True)
         self._set_status(f"Ollama error: {error_msg}", "#e74c3c")
 
     def _set_status(self, text, color="#888"):
@@ -667,6 +798,24 @@ class SmartSelectDialog(QtWidgets.QDialog):
             types[fi.surface_type] = types.get(fi.surface_type, 0) + 1
         parts = [f"{count} {t}" for t, count in sorted(types.items())]
         self.lbl_summary.setText(f"{total} faces: {', '.join(parts)}")
+
+    # ── Row selection → 3D view ─────────────────────────────────
+
+    def _on_table_selection_changed(self):
+        if not self.obj:
+            return
+        try:
+            import FreeCADGui
+            FreeCADGui.Selection.clearSelection()
+            rows = set(idx.row() for idx in self.table.selectedIndexes())
+            for row in rows:
+                score_item = self.table.item(row, self.COL_SCORE)
+                if score_item:
+                    face_idx = int(score_item.data(QtCore.Qt.UserRole))
+                    FreeCADGui.Selection.addSelection(
+                        self.obj, f"Face{face_idx + 1}")
+        except Exception:
+            pass
 
     # ── Hover + Double-click ──────────────────────────────────────
 

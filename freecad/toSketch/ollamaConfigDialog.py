@@ -190,6 +190,12 @@ class OllamaConfigDialog(QtWidgets.QDialog):
         self.lbl_test_result = QtWidgets.QLabel("")
         self.lbl_test_result.setStyleSheet("font-size: 11px;")
         prompt_btns.addWidget(self.lbl_test_result)
+
+        self.btn_retry = QtWidgets.QPushButton("Retry")
+        self.btn_retry.setFixedWidth(60)
+        self.btn_retry.setVisible(False)
+        self.btn_retry.clicked.connect(self._test_prompt)
+        prompt_btns.addWidget(self.btn_retry)
         prompt_btns.addStretch()
         prompt_layout.addLayout(prompt_btns)
 
@@ -381,6 +387,7 @@ class OllamaConfigDialog(QtWidgets.QDialog):
         self.txt_system_prompt.setPlainText(_DEFAULTS["system_prompt"])
 
     def _test_prompt(self):
+        self.btn_retry.setVisible(False)
         self.lbl_test_result.setText("Testing...")
         self.lbl_test_result.setStyleSheet(
             "color: #f39c12; font-size: 11px;")
@@ -410,7 +417,9 @@ class OllamaConfigDialog(QtWidgets.QDialog):
             self.lbl_test_result.setText("OK — model responds correctly")
             self.lbl_test_result.setStyleSheet(
                 "color: #27ae60; font-size: 11px;")
+            self.btn_retry.setVisible(False)
         else:
             self.lbl_test_result.setText(f"Failed: {detail[:60]}")
             self.lbl_test_result.setStyleSheet(
                 "color: #e74c3c; font-size: 11px;")
+            self.btn_retry.setVisible(True)
