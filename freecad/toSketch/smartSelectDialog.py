@@ -81,6 +81,8 @@ class OllamaWorker(QtCore.QThread):
 class SmartSelectDialog(QtWidgets.QDialog):
     """Dialog for AI-assisted face selection from STEP shapes."""
 
+    _sig_connection_checked = QtCore.Signal(bool, int)
+
     # Column indices
     COL_CHECK = 0
     COL_SCORE = 1
@@ -102,6 +104,7 @@ class SmartSelectDialog(QtWidgets.QDialog):
         self._group_filter = "All"
         self._search_text = ""
 
+        self._sig_connection_checked.connect(self._on_connection_checked)
         self.setWindowTitle("Smart Face Selection")
         self.setMinimumSize(960, 700)
         self._build_ui()
@@ -392,15 +395,10 @@ class SmartSelectDialog(QtWidgets.QDialog):
             else:
                 count = 0
             # Just update status — model selection is in config dialog
-            QtCore.QMetaObject.invokeMethod(
-                self, "_on_connection_checked",
-                QtCore.Qt.QueuedConnection,
-                QtCore.Q_ARG(bool, available),
-                QtCore.Q_ARG(int, count))
+            self._sig_connection_checked.emit(available, count)
         t = threading.Thread(target=_load, daemon=True)
         t.start()
 
-    @QtCore.Slot(bool, int)
     def _on_connection_checked(self, available, model_count):
         if available:
             self._set_status(
