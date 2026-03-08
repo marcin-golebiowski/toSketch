@@ -16,9 +16,53 @@ from .ollamaClient import (
 )
 
 
+# ── Color helpers ─────────────────────────────────────────────────
+def _score_color(score):
+    """Return a QColor on a red-yellow-green gradient for 0-100."""
+    score = max(0, min(100, score))
+    if score < 50:
+        r = 220
+        g = int(80 + 140 * (score / 50.0))
+        b = 60
+    else:
+        r = int(220 - 180 * ((score - 50) / 50.0))
+        g = 200
+        b = 60
+    return QtGui.QColor(r, g, b)
+
+
+def _score_bar_widget(score, parent=None):
+    """Create a small horizontal bar widget showing a score 0-100."""
+    bar = QtWidgets.QProgressBar(parent)
+    bar.setRange(0, 100)
+    bar.setValue(int(score))
+    bar.setTextVisible(True)
+    bar.setFormat(f"{int(score)}")
+    bar.setFixedHeight(18)
+    color = _score_color(score)
+    bar.setStyleSheet(
+        f"QProgressBar {{ border: 1px solid #ccc; border-radius: 3px; "
+        f"background: #f0f0f0; text-align: center; font-size: 11px; }}"
+        f"QProgressBar::chunk {{ background: {color.name()}; border-radius: 2px; }}"
+    )
+    return bar
+
+
+# ── Surface type icons (unicode) ──────────────────────────────────
+_TYPE_ICONS = {
+    "Plane": "\u25ad",      # white rectangle
+    "Cylinder": "\u25ef",   # large circle
+    "Cone": "\u25b3",       # triangle
+    "Sphere": "\u25cf",     # filled circle
+    "BSpline": "\u223f",    # sine wave
+    "Toroid": "\u25c9",     # fisheye
+    "Other": "\u25a1",      # white square
+}
+
+
 class OllamaWorker(QtCore.QThread):
     """Background thread for Ollama queries."""
-    finished = QtCore.Signal(object)  # dict or None
+    finished = QtCore.Signal(object)
     error = QtCore.Signal(str)
 
     def __init__(self, prompt, prefs, parent=None):
@@ -37,76 +81,224 @@ class OllamaWorker(QtCore.QThread):
 class SmartSelectDialog(QtWidgets.QDialog):
     """Dialog for AI-assisted face selection from STEP shapes."""
 
+    # Column indices
+    COL_CHECK = 0
+    COL_SCORE = 1
+    COL_NAME = 2
+    COL_GROUP = 3
+    COL_TYPE = 4
+    COL_AREA = 5
+    COL_EDGES = 6
+    COL_NORMAL = 7
+
     def __init__(self, shape, obj=None, parent=None):
         super().__init__(parent)
         self.shape = shape
-        self.obj = obj  # FreeCAD object for 3D highlighting
+        self.obj = obj
         self.analysis = None
         self.worker = None
         self._prev_selection = None
+        self._type_filter = "All"
+        self._group_filter = "All"
+        self._search_text = ""
 
         self.setWindowTitle("Smart Face Selection")
-        self.setMinimumSize(900, 650)
+        self.setMinimumSize(960, 700)
         self._build_ui()
         self._run_analysis()
 
+    # ── UI Construction ───────────────────────────────────────────
+
     def _build_ui(self):
         layout = QtWidgets.QVBoxLayout(self)
+        layout.setSpacing(6)
+        layout.setContentsMargins(8, 8, 8, 8)
 
-        # ── AI Analysis Panel ──
+        # ── Top: AI Analysis Panel ──
         ai_group = QtWidgets.QGroupBox("AI Analysis")
-        ai_layout = QtWidgets.QVBoxLayout(ai_group)
+        ai_group.setStyleSheet(
+            "QGroupBox { font-weight: bold; padding-top: 14px; }"
+            "QGroupBox::title { subcontrol-origin: margin; left: 8px; }")
+        ai_layout = QtWidgets.QGridLayout(ai_group)
+        ai_layout.setSpacing(4)
 
-        self.lbl_description = QtWidgets.QLabel("Part: (analyzing...)")
-        self.lbl_strategy = QtWidgets.QLabel("Strategy: —")
-        self.lbl_status = QtWidgets.QLabel("Status: checking Ollama...")
+        self.lbl_description = QtWidgets.QLabel("(analyzing...)")
+        self.lbl_description.setWordWrap(True)
+        self.lbl_description.setStyleSheet("color: #2c3e50; font-size: 12px;")
 
-        ai_layout.addWidget(self.lbl_description)
-        ai_layout.addWidget(self.lbl_strategy)
-        ai_layout.addWidget(self.lbl_status)
+        self.lbl_strategy = QtWidgets.QLabel("")
+        self.lbl_strategy.setWordWrap(True)
+        self.lbl_strategy.setStyleSheet("color: #555; font-style: italic;")
+
+        self.lbl_status = QtWidgets.QLabel("")
+        self.lbl_status.setStyleSheet("font-size: 11px;")
+
+        lbl_part = QtWidgets.QLabel("Part:")
+        lbl_part.setStyleSheet("font-weight: bold; color: #666;")
+        lbl_strat = QtWidgets.QLabel("Strategy:")
+        lbl_strat.setStyleSheet("font-weight: bold; color: #666;")
+
+        ai_layout.addWidget(lbl_part, 0, 0)
+        ai_layout.addWidget(self.lbl_description, 0, 1)
+        ai_layout.addWidget(lbl_strat, 1, 0)
+        ai_layout.addWidget(self.lbl_strategy, 1, 1)
+        ai_layout.addWidget(self.lbl_status, 2, 0, 1, 2)
+        ai_layout.setColumnStretch(1, 1)
+
         layout.addWidget(ai_group)
+
+        # ── Filter / Search Bar ──
+        filter_layout = QtWidgets.QHBoxLayout()
+        filter_layout.setSpacing(8)
+
+        # Search box
+        self.txt_search = QtWidgets.QLineEdit()
+        self.txt_search.setPlaceholderText("Search faces...")
+        self.txt_search.setClearButtonEnabled(True)
+        self.txt_search.setMaximumWidth(200)
+        self.txt_search.textChanged.connect(self._on_filter_changed)
+        filter_layout.addWidget(self.txt_search)
+
+        # Type filter
+        filter_layout.addWidget(QtWidgets.QLabel("Type:"))
+        self.combo_type_filter = QtWidgets.QComboBox()
+        self.combo_type_filter.addItem("All")
+        self.combo_type_filter.setMinimumWidth(100)
+        self.combo_type_filter.currentTextChanged.connect(self._on_filter_changed)
+        filter_layout.addWidget(self.combo_type_filter)
+
+        # Group filter
+        filter_layout.addWidget(QtWidgets.QLabel("Group:"))
+        self.combo_group_filter = QtWidgets.QComboBox()
+        self.combo_group_filter.addItem("All")
+        self.combo_group_filter.setMinimumWidth(120)
+        self.combo_group_filter.currentTextChanged.connect(self._on_filter_changed)
+        filter_layout.addWidget(self.combo_group_filter)
+
+        # Face count summary
+        self.lbl_summary = QtWidgets.QLabel("")
+        self.lbl_summary.setStyleSheet(
+            "color: #666; font-size: 11px; padding-left: 8px;")
+        filter_layout.addStretch()
+        filter_layout.addWidget(self.lbl_summary)
+
+        layout.addLayout(filter_layout)
 
         # ── Face Table ──
         self.table = QtWidgets.QTableWidget()
-        self.table.setColumnCount(7)
+        self.table.setColumnCount(8)
         self.table.setHorizontalHeaderLabels([
-            "", "Score", "AI Name", "Group", "Type", "Area", "Edges"
+            "", "Score", "AI Name", "Group", "Type", "Area (mm\u00b2)", "Edges", "Normal"
         ])
         self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
         self.table.setSortingEnabled(True)
-        self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.cellEntered.connect(self._on_hover)
+        self.table.setAlternatingRowColors(True)
+        self.table.setStyleSheet(
+            "QTableWidget { gridline-color: #ddd; font-size: 12px; }"
+            "QTableWidget::item { padding: 2px 6px; }"
+            "QTableWidget::item:selected { background: #d4e6f9; color: #000; }"
+            "QHeaderView::section { background: #f5f5f5; border: 1px solid #ddd; "
+            "padding: 4px 6px; font-weight: bold; font-size: 11px; }"
+        )
+        header = self.table.horizontalHeader()
+        header.setStretchLastSection(True)
+        header.setSectionResizeMode(self.COL_CHECK, QtWidgets.QHeaderView.Fixed)
+        header.resizeSection(self.COL_CHECK, 30)
+        header.setSectionResizeMode(self.COL_SCORE, QtWidgets.QHeaderView.Fixed)
+        header.resizeSection(self.COL_SCORE, 80)
+
+        self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(26)
         self.table.setMouseTracking(True)
-        layout.addWidget(self.table)
+        self.table.cellEntered.connect(self._on_hover)
+        self.table.cellDoubleClicked.connect(self._on_double_click)
+        self.table.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._show_context_menu)
+        layout.addWidget(self.table, 1)  # stretch factor = 1
 
         # ── Button Row ──
         btn_layout = QtWidgets.QHBoxLayout()
+        btn_layout.setSpacing(6)
 
-        btn_all = QtWidgets.QPushButton("Select All")
+        btn_all = QtWidgets.QPushButton(" Select All")
         btn_all.clicked.connect(self._select_all)
         btn_layout.addWidget(btn_all)
 
-        btn_none = QtWidgets.QPushButton("Deselect All")
+        btn_none = QtWidgets.QPushButton(" Deselect All")
         btn_none.clicked.connect(self._deselect_all)
         btn_layout.addWidget(btn_none)
 
-        btn_ai = QtWidgets.QPushButton("AI Recommended")
+        btn_invert = QtWidgets.QPushButton(" Invert")
+        btn_invert.clicked.connect(self._invert_selection)
+        btn_layout.addWidget(btn_invert)
+
+        sep = QtWidgets.QFrame()
+        sep.setFrameShape(QtWidgets.QFrame.VLine)
+        sep.setFrameShadow(QtWidgets.QFrame.Sunken)
+        btn_layout.addWidget(sep)
+
+        btn_ai = QtWidgets.QPushButton(" AI Recommended")
+        btn_ai.setStyleSheet(
+            "QPushButton { color: #d35400; font-weight: bold; }")
         btn_ai.clicked.connect(self._select_ai_recommended)
         btn_layout.addWidget(btn_ai)
 
+        sep2 = QtWidgets.QFrame()
+        sep2.setFrameShape(QtWidgets.QFrame.VLine)
+        sep2.setFrameShadow(QtWidgets.QFrame.Sunken)
+        btn_layout.addWidget(sep2)
+
+        # Threshold slider + spinbox linked
         btn_layout.addWidget(QtWidgets.QLabel("Threshold:"))
+        self.slider_threshold = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.slider_threshold.setRange(0, 100)
+        self.slider_threshold.setValue(60)
+        self.slider_threshold.setMaximumWidth(120)
+        self.slider_threshold.setStyleSheet(
+            "QSlider::groove:horizontal { height: 6px; background: #ddd; "
+            "border-radius: 3px; }"
+            "QSlider::handle:horizontal { width: 14px; margin: -4px 0; "
+            "background: #3498db; border-radius: 7px; }"
+            "QSlider::sub-page:horizontal { background: #3498db; border-radius: 3px; }"
+        )
+        btn_layout.addWidget(self.slider_threshold)
+
         self.spin_threshold = QtWidgets.QSpinBox()
         self.spin_threshold.setRange(0, 100)
         self.spin_threshold.setValue(60)
-        self.spin_threshold.valueChanged.connect(self._apply_threshold)
+        self.spin_threshold.setFixedWidth(50)
         btn_layout.addWidget(self.spin_threshold)
 
+        # Link slider <-> spinbox
+        self.slider_threshold.valueChanged.connect(self.spin_threshold.setValue)
+        self.spin_threshold.valueChanged.connect(self.slider_threshold.setValue)
+        self.spin_threshold.valueChanged.connect(self._apply_threshold)
+
         btn_layout.addStretch()
+
+        # Selected count badge
+        self.lbl_selected_count = QtWidgets.QLabel("0 selected")
+        self.lbl_selected_count.setStyleSheet(
+            "background: #3498db; color: white; padding: 2px 8px; "
+            "border-radius: 10px; font-size: 11px; font-weight: bold;")
+        btn_layout.addWidget(self.lbl_selected_count)
+
         layout.addLayout(btn_layout)
 
-        # ── Settings Panel ──
-        settings_group = QtWidgets.QGroupBox("Settings")
-        settings_layout = QtWidgets.QHBoxLayout(settings_group)
+        # ── Collapsible Settings Panel ──
+        self.settings_toggle = QtWidgets.QPushButton("Settings  \u25bc")
+        self.settings_toggle.setFlat(True)
+        self.settings_toggle.setStyleSheet(
+            "QPushButton { text-align: left; color: #666; font-size: 11px; "
+            "padding: 2px 0; } QPushButton:hover { color: #333; }")
+        self.settings_toggle.clicked.connect(self._toggle_settings)
+        layout.addWidget(self.settings_toggle)
+
+        self.settings_widget = QtWidgets.QWidget()
+        settings_layout = QtWidgets.QHBoxLayout(self.settings_widget)
+        settings_layout.setContentsMargins(4, 0, 4, 4)
+        settings_layout.setSpacing(8)
 
         settings_layout.addWidget(QtWidgets.QLabel("Ollama Model:"))
         self.combo_model = QtWidgets.QComboBox()
@@ -123,32 +315,53 @@ class SmartSelectDialog(QtWidgets.QDialog):
         settings_layout.addWidget(self.chk_ai)
 
         btn_reanalyze = QtWidgets.QPushButton("Re-analyze")
+        btn_reanalyze.setStyleSheet(
+            "QPushButton { background: #2980b9; color: white; padding: 4px 12px; "
+            "border-radius: 3px; } QPushButton:hover { background: #3498db; }")
         btn_reanalyze.clicked.connect(self._reanalyze)
         settings_layout.addWidget(btn_reanalyze)
 
         settings_layout.addStretch()
-        layout.addWidget(settings_group)
+        self.settings_widget.setVisible(False)  # collapsed by default
+        layout.addWidget(self.settings_widget)
 
         # ── Progress Bar ──
         self.progress = QtWidgets.QProgressBar()
         self.progress.setRange(0, 0)  # indeterminate
+        self.progress.setFixedHeight(4)
+        self.progress.setStyleSheet(
+            "QProgressBar { border: none; background: transparent; }"
+            "QProgressBar::chunk { background: #3498db; }")
         self.progress.setVisible(False)
         layout.addWidget(self.progress)
 
-        # ── Dialog Buttons ──
-        dialog_btns = QtWidgets.QHBoxLayout()
-        dialog_btns.addStretch()
+        # ── Status Bar ──
+        status_layout = QtWidgets.QHBoxLayout()
+        status_layout.setContentsMargins(0, 0, 0, 0)
 
-        btn_create = QtWidgets.QPushButton("Create Sketches")
+        self.lbl_statusbar = QtWidgets.QLabel("")
+        self.lbl_statusbar.setStyleSheet("color: #888; font-size: 11px;")
+        status_layout.addWidget(self.lbl_statusbar)
+        status_layout.addStretch()
+
+        btn_create = QtWidgets.QPushButton("  Create Sketches")
         btn_create.setDefault(True)
+        btn_create.setStyleSheet(
+            "QPushButton { background: #27ae60; color: white; padding: 6px 20px; "
+            "border-radius: 4px; font-weight: bold; font-size: 13px; }"
+            "QPushButton:hover { background: #2ecc71; }"
+            "QPushButton:disabled { background: #bdc3c7; }")
         btn_create.clicked.connect(self.accept)
-        dialog_btns.addWidget(btn_create)
+        status_layout.addWidget(btn_create)
 
         btn_cancel = QtWidgets.QPushButton("Cancel")
+        btn_cancel.setStyleSheet(
+            "QPushButton { padding: 6px 16px; border-radius: 4px; "
+            "font-size: 13px; }")
         btn_cancel.clicked.connect(self.reject)
-        dialog_btns.addWidget(btn_cancel)
+        status_layout.addWidget(btn_cancel)
 
-        layout.addLayout(dialog_btns)
+        layout.addLayout(status_layout)
 
         # Load preferences
         prefs = get_preferences()
@@ -156,15 +369,22 @@ class SmartSelectDialog(QtWidgets.QDialog):
         self.combo_model.addItem(prefs["model"])
         self.chk_ai.setChecked(prefs["enabled"])
 
-        # Populate model list in background
         self._load_models_async(prefs)
 
+    # ── Settings collapse ─────────────────────────────────────────
+
+    def _toggle_settings(self):
+        visible = not self.settings_widget.isVisible()
+        self.settings_widget.setVisible(visible)
+        self.settings_toggle.setText(
+            "Settings  \u25b2" if visible else "Settings  \u25bc")
+
+    # ── Model loading ─────────────────────────────────────────────
+
     def _load_models_async(self, prefs):
-        """Load available Ollama models in a background thread."""
         def _load():
             models = list_ollama_models(prefs)
             if models:
-                # Schedule UI update on main thread
                 QtCore.QMetaObject.invokeMethod(
                     self, "_update_model_list",
                     QtCore.Qt.QueuedConnection,
@@ -185,19 +405,21 @@ class SmartSelectDialog(QtWidgets.QDialog):
             self.combo_model.addItem(current)
             self.combo_model.setCurrentIndex(self.combo_model.count() - 1)
 
+    # ── Analysis ──────────────────────────────────────────────────
+
     def _run_analysis(self):
-        """Run algorithmic analysis, then optionally query Ollama."""
         self.analysis = full_analysis(self.shape)
+        self._populate_filters()
         self._populate_table()
         self._apply_threshold(self.spin_threshold.value())
+        self._update_summary()
 
         if self.chk_ai.isChecked():
             self._start_ollama_query()
         else:
-            self.lbl_status.setText("Status: AI disabled")
+            self._set_status("AI disabled — algorithmic scoring only", "#888")
 
     def _start_ollama_query(self):
-        """Query Ollama in a background thread."""
         prefs = {
             "url": self.txt_url.text(),
             "model": self.combo_model.currentText(),
@@ -206,12 +428,12 @@ class SmartSelectDialog(QtWidgets.QDialog):
         }
 
         if not check_ollama_available(prefs):
-            self.lbl_status.setText(
-                "Status: Ollama unavailable (algorithmic results only)")
+            self._set_status(
+                "Ollama unavailable — using algorithmic results only", "#e67e22")
             return
 
-        self.lbl_status.setText(
-            f"Status: Querying Ollama ({prefs['model']})...")
+        self._set_status(
+            f"Querying Ollama ({prefs['model']})...", "#2980b9")
         self.progress.setVisible(True)
 
         prompt = build_prompt(self.analysis.faces, self.analysis.groups)
@@ -225,93 +447,237 @@ class SmartSelectDialog(QtWidgets.QDialog):
         if result:
             strategy = apply_ollama_annotations(
                 self.analysis.faces, result)
-            self.analysis.ai_description = result.get(
-                "part_description", "")
+            self.analysis.ai_description = result.get("part_description", "")
             self.analysis.ai_strategy = strategy
 
-            self.lbl_description.setText(
-                f"Part: {self.analysis.ai_description}")
-            self.lbl_strategy.setText(
-                f"Strategy: {strategy}")
-            self.lbl_status.setText(
-                f"Status: Ollama analysis complete "
-                f"({self.combo_model.currentText()})")
+            self.lbl_description.setText(self.analysis.ai_description or "(no description)")
+            self.lbl_strategy.setText(strategy or "(no strategy)")
+            self._set_status(
+                f"Ollama analysis complete ({self.combo_model.currentText()})",
+                "#27ae60")
 
+            self._populate_filters()
             self._populate_table()
             self._apply_threshold(self.spin_threshold.value())
         else:
-            self.lbl_status.setText(
-                "Status: Ollama returned no results")
+            self._set_status("Ollama returned no results", "#e74c3c")
 
     def _on_ollama_error(self, error_msg):
         self.progress.setVisible(False)
-        self.lbl_status.setText(f"Status: Ollama error — {error_msg}")
+        self._set_status(f"Ollama error: {error_msg}", "#e74c3c")
 
-    def _populate_table(self):
-        """Fill the table from self.analysis.faces."""
+    def _set_status(self, text, color="#888"):
+        self.lbl_status.setText(text)
+        self.lbl_status.setStyleSheet(f"color: {color}; font-size: 11px;")
+        self.lbl_statusbar.setText(text)
+
+    # ── Filters ───────────────────────────────────────────────────
+
+    def _populate_filters(self):
         if not self.analysis:
             return
 
-        # Save checkbox states before repopulating
+        # Type filter
+        current_type = self.combo_type_filter.currentText()
+        self.combo_type_filter.blockSignals(True)
+        self.combo_type_filter.clear()
+        self.combo_type_filter.addItem("All")
+        types = sorted({fi.surface_type for fi in self.analysis.faces})
+        for t in types:
+            icon = _TYPE_ICONS.get(t, "")
+            count = sum(1 for fi in self.analysis.faces if fi.surface_type == t)
+            self.combo_type_filter.addItem(f"{icon} {t} ({count})")
+        idx = self.combo_type_filter.findText(current_type)
+        if idx >= 0:
+            self.combo_type_filter.setCurrentIndex(idx)
+        self.combo_type_filter.blockSignals(False)
+
+        # Group filter
+        current_group = self.combo_group_filter.currentText()
+        self.combo_group_filter.blockSignals(True)
+        self.combo_group_filter.clear()
+        self.combo_group_filter.addItem("All")
+        groups = sorted({fi.ai_group for fi in self.analysis.faces if fi.ai_group})
+        for g in groups:
+            count = sum(1 for fi in self.analysis.faces if fi.ai_group == g)
+            self.combo_group_filter.addItem(f"{g} ({count})")
+        # Also add normal-based groups
+        for g, indices in self.analysis.groups.items():
+            self.combo_group_filter.addItem(f"{g} ({len(indices)})")
+        idx = self.combo_group_filter.findText(current_group)
+        if idx >= 0:
+            self.combo_group_filter.setCurrentIndex(idx)
+        self.combo_group_filter.blockSignals(False)
+
+    def _on_filter_changed(self, _=None):
+        self._apply_visibility()
+
+    def _face_matches_filter(self, fi):
+        """Check if a FaceInfo passes current filters."""
+        # Search text
+        search = self.txt_search.text().strip().lower()
+        if search:
+            searchable = f"{fi.ai_name} {fi.ai_group} {fi.surface_type} Face {fi.index}".lower()
+            if search not in searchable:
+                return False
+
+        # Type filter
+        type_text = self.combo_type_filter.currentText()
+        if type_text != "All":
+            # Extract type name from "icon Type (count)" format
+            type_name = type_text.split("(")[0].strip()
+            for icon in _TYPE_ICONS.values():
+                type_name = type_name.replace(icon, "").strip()
+            if fi.surface_type != type_name:
+                return False
+
+        # Group filter
+        group_text = self.combo_group_filter.currentText()
+        if group_text != "All":
+            group_name = group_text.split("(")[0].strip()
+            if fi.ai_group != group_name:
+                # Also check normal-based groups
+                in_normal_group = False
+                for g, indices in (self.analysis.groups or {}).items():
+                    if g == group_name and fi.index in indices:
+                        in_normal_group = True
+                        break
+                if not in_normal_group:
+                    return False
+
+        return True
+
+    def _apply_visibility(self):
+        """Show/hide table rows based on filters."""
+        if not self.analysis:
+            return
+        face_map = {fi.index: fi for fi in self.analysis.faces}
+        visible_count = 0
+        for row in range(self.table.rowCount()):
+            score_item = self.table.item(row, self.COL_SCORE)
+            if not score_item:
+                continue
+            idx = int(score_item.data(QtCore.Qt.UserRole))
+            fi = face_map.get(idx)
+            if fi and self._face_matches_filter(fi):
+                self.table.setRowHidden(row, False)
+                visible_count += 1
+            else:
+                self.table.setRowHidden(row, True)
+        self.lbl_summary.setText(
+            f"Showing {visible_count} of {len(self.analysis.faces)} faces")
+
+    # ── Table ─────────────────────────────────────────────────────
+
+    def _populate_table(self):
+        if not self.analysis:
+            return
+
+        # Save checkbox states
         checked = set()
         for row in range(self.table.rowCount()):
-            item = self.table.item(row, 0)
+            item = self.table.item(row, self.COL_CHECK)
             if item and item.checkState() == QtCore.Qt.Checked:
-                idx_item = self.table.item(row, 1)
-                if idx_item:
-                    checked.add(int(idx_item.data(QtCore.Qt.UserRole)))
+                score_item = self.table.item(row, self.COL_SCORE)
+                if score_item:
+                    checked.add(int(score_item.data(QtCore.Qt.UserRole)))
 
         self.table.setSortingEnabled(False)
         self.table.setRowCount(len(self.analysis.faces))
 
         for row, fi in enumerate(self.analysis.faces):
-            # Checkbox column
+            # Checkbox
             chk = QtWidgets.QTableWidgetItem()
             chk.setFlags(chk.flags() | QtCore.Qt.ItemIsUserCheckable)
-            if fi.index in checked:
-                chk.setCheckState(QtCore.Qt.Checked)
-            else:
-                chk.setCheckState(QtCore.Qt.Unchecked)
-            self.table.setItem(row, 0, chk)
+            chk.setCheckState(
+                QtCore.Qt.Checked if fi.index in checked
+                else QtCore.Qt.Unchecked)
+            self.table.setItem(row, self.COL_CHECK, chk)
 
-            # Score (sortable as number)
+            # Score — use cell widget for color bar
             score_item = QtWidgets.QTableWidgetItem()
             score_item.setData(QtCore.Qt.DisplayRole, int(fi.algo_score))
             score_item.setData(QtCore.Qt.UserRole, fi.index)
-            self.table.setItem(row, 1, score_item)
+            # Color the background with gradient
+            bg = _score_color(fi.algo_score)
+            bg.setAlpha(60)
+            score_item.setBackground(bg)
+            score_item.setTextAlignment(QtCore.Qt.AlignCenter)
+            self.table.setItem(row, self.COL_SCORE, score_item)
 
-            # AI Name
-            self.table.setItem(row, 2,
-                QtWidgets.QTableWidgetItem(fi.ai_name or "—"))
+            # AI Name — bold if AI-recommended
+            name_item = QtWidgets.QTableWidgetItem(fi.ai_name or f"Face {fi.index}")
+            if fi.ai_recommended:
+                font = name_item.font()
+                font.setBold(True)
+                name_item.setFont(font)
+                name_item.setForeground(QtGui.QColor("#d35400"))
+            self.table.setItem(row, self.COL_NAME, name_item)
 
             # Group
-            self.table.setItem(row, 3,
-                QtWidgets.QTableWidgetItem(fi.ai_group or "—"))
+            group_text = fi.ai_group or ""
+            if not group_text:
+                # Fallback to normal-based group
+                for g, indices in self.analysis.groups.items():
+                    if fi.index in indices:
+                        group_text = g
+                        break
+            self.table.setItem(row, self.COL_GROUP,
+                QtWidgets.QTableWidgetItem(group_text or "\u2014"))
 
-            # Surface type
-            self.table.setItem(row, 4,
-                QtWidgets.QTableWidgetItem(fi.surface_type))
+            # Surface type with icon
+            icon = _TYPE_ICONS.get(fi.surface_type, "")
+            type_item = QtWidgets.QTableWidgetItem(f"{icon} {fi.surface_type}")
+            self.table.setItem(row, self.COL_TYPE, type_item)
 
             # Area
             area_item = QtWidgets.QTableWidgetItem()
             area_item.setData(QtCore.Qt.DisplayRole, round(fi.area, 1))
-            self.table.setItem(row, 5, area_item)
+            area_item.setTextAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+            self.table.setItem(row, self.COL_AREA, area_item)
 
-            # Edge count
+            # Edges
             edge_item = QtWidgets.QTableWidgetItem()
             edge_item.setData(QtCore.Qt.DisplayRole, fi.edge_count)
-            self.table.setItem(row, 6, edge_item)
+            edge_item.setTextAlignment(QtCore.Qt.AlignCenter)
+            self.table.setItem(row, self.COL_EDGES, edge_item)
+
+            # Normal direction
+            nx, ny, nz = fi.normal
+            normal_item = QtWidgets.QTableWidgetItem(
+                f"({nx:.2f}, {ny:.2f}, {nz:.2f})")
+            normal_item.setForeground(QtGui.QColor("#999"))
+            self.table.setItem(row, self.COL_NORMAL, normal_item)
 
         self.table.setSortingEnabled(True)
         self.table.resizeColumnsToContents()
 
+        # Re-apply filters
+        self._apply_visibility()
+        self._update_summary()
+
+    def _update_summary(self):
+        if not self.analysis:
+            return
+        total = len(self.analysis.faces)
+        checked = len(self.get_selected_faces())
+        self.lbl_selected_count.setText(f"{checked} selected")
+
+        # Update statusbar with face count breakdown
+        types = {}
+        for fi in self.analysis.faces:
+            types[fi.surface_type] = types.get(fi.surface_type, 0) + 1
+        parts = [f"{count} {t}" for t, count in sorted(types.items())]
+        self.lbl_summary.setText(f"{total} faces: {', '.join(parts)}")
+
+    # ── Hover + Double-click ──────────────────────────────────────
+
     def _on_hover(self, row, column):
-        """Highlight face in 3D view on hover."""
         if not self.obj:
             return
         try:
             import FreeCADGui
-            score_item = self.table.item(row, 1)
+            score_item = self.table.item(row, self.COL_SCORE)
             if score_item:
                 face_idx = int(score_item.data(QtCore.Qt.UserRole))
                 if self._prev_selection is not None:
@@ -323,43 +689,190 @@ class SmartSelectDialog(QtWidgets.QDialog):
         except Exception:
             pass
 
+    def _on_double_click(self, row, column):
+        """Double-click a row to zoom/fit the face in 3D view."""
+        if not self.obj:
+            return
+        try:
+            import FreeCADGui
+            score_item = self.table.item(row, self.COL_SCORE)
+            if score_item:
+                face_idx = int(score_item.data(QtCore.Qt.UserRole))
+                FreeCADGui.Selection.clearSelection()
+                FreeCADGui.Selection.addSelection(
+                    self.obj, f"Face{face_idx + 1}")
+                FreeCADGui.SendMsgToActiveView("ViewSelection")
+        except Exception:
+            pass
+
+    # ── Context Menu ──────────────────────────────────────────────
+
+    def _show_context_menu(self, pos):
+        if not self.analysis:
+            return
+        row = self.table.rowAt(pos.y())
+        if row < 0:
+            return
+
+        score_item = self.table.item(row, self.COL_SCORE)
+        if not score_item:
+            return
+        face_idx = int(score_item.data(QtCore.Qt.UserRole))
+        face_map = {fi.index: fi for fi in self.analysis.faces}
+        fi = face_map.get(face_idx)
+        if not fi:
+            return
+
+        menu = QtWidgets.QMenu(self)
+
+        # Select by same type
+        act_type = menu.addAction(
+            f"Select all {fi.surface_type} faces")
+        act_type.triggered.connect(
+            lambda: self._select_by_type(fi.surface_type))
+
+        # Select by same group
+        group_text = self.table.item(row, self.COL_GROUP)
+        if group_text and group_text.text() != "\u2014":
+            act_group = menu.addAction(
+                f"Select all in \"{group_text.text()}\"")
+            act_group.triggered.connect(
+                lambda g=group_text.text(): self._select_by_group(g))
+
+        menu.addSeparator()
+
+        # Select similar area (within 20%)
+        act_area = menu.addAction("Select faces with similar area")
+        act_area.triggered.connect(
+            lambda: self._select_similar_area(fi.area))
+
+        # Select similar edge count
+        act_edges = menu.addAction(
+            f"Select faces with {fi.edge_count} edges")
+        act_edges.triggered.connect(
+            lambda: self._select_by_edge_count(fi.edge_count))
+
+        menu.addSeparator()
+
+        # Deselect this face
+        act_deselect = menu.addAction("Deselect this face")
+        act_deselect.triggered.connect(
+            lambda: self.table.item(row, self.COL_CHECK).setCheckState(
+                QtCore.Qt.Unchecked))
+
+        menu.exec_(self.table.mapToGlobal(pos))
+
+    def _select_by_type(self, surface_type):
+        face_map = {fi.index: fi for fi in self.analysis.faces}
+        for row in range(self.table.rowCount()):
+            score_item = self.table.item(row, self.COL_SCORE)
+            if not score_item:
+                continue
+            idx = int(score_item.data(QtCore.Qt.UserRole))
+            fi = face_map.get(idx)
+            if fi and fi.surface_type == surface_type:
+                self.table.item(row, self.COL_CHECK).setCheckState(
+                    QtCore.Qt.Checked)
+        self._update_summary()
+
+    def _select_by_group(self, group_name):
+        face_map = {fi.index: fi for fi in self.analysis.faces}
+        for row in range(self.table.rowCount()):
+            score_item = self.table.item(row, self.COL_SCORE)
+            if not score_item:
+                continue
+            idx = int(score_item.data(QtCore.Qt.UserRole))
+            fi = face_map.get(idx)
+            group_item = self.table.item(row, self.COL_GROUP)
+            if group_item and group_item.text() == group_name:
+                self.table.item(row, self.COL_CHECK).setCheckState(
+                    QtCore.Qt.Checked)
+        self._update_summary()
+
+    def _select_similar_area(self, target_area, tolerance=0.2):
+        face_map = {fi.index: fi for fi in self.analysis.faces}
+        for row in range(self.table.rowCount()):
+            score_item = self.table.item(row, self.COL_SCORE)
+            if not score_item:
+                continue
+            idx = int(score_item.data(QtCore.Qt.UserRole))
+            fi = face_map.get(idx)
+            if fi and abs(fi.area - target_area) / max(target_area, 1e-10) < tolerance:
+                self.table.item(row, self.COL_CHECK).setCheckState(
+                    QtCore.Qt.Checked)
+        self._update_summary()
+
+    def _select_by_edge_count(self, edge_count):
+        face_map = {fi.index: fi for fi in self.analysis.faces}
+        for row in range(self.table.rowCount()):
+            score_item = self.table.item(row, self.COL_SCORE)
+            if not score_item:
+                continue
+            idx = int(score_item.data(QtCore.Qt.UserRole))
+            fi = face_map.get(idx)
+            if fi and fi.edge_count == edge_count:
+                self.table.item(row, self.COL_CHECK).setCheckState(
+                    QtCore.Qt.Checked)
+        self._update_summary()
+
+    # ── Selection Actions ─────────────────────────────────────────
+
     def _select_all(self):
         for row in range(self.table.rowCount()):
-            self.table.item(row, 0).setCheckState(QtCore.Qt.Checked)
+            if not self.table.isRowHidden(row):
+                self.table.item(row, self.COL_CHECK).setCheckState(
+                    QtCore.Qt.Checked)
+        self._update_summary()
 
     def _deselect_all(self):
         for row in range(self.table.rowCount()):
-            self.table.item(row, 0).setCheckState(QtCore.Qt.Unchecked)
+            self.table.item(row, self.COL_CHECK).setCheckState(
+                QtCore.Qt.Unchecked)
+        self._update_summary()
+
+    def _invert_selection(self):
+        for row in range(self.table.rowCount()):
+            if self.table.isRowHidden(row):
+                continue
+            item = self.table.item(row, self.COL_CHECK)
+            new_state = (QtCore.Qt.Unchecked
+                        if item.checkState() == QtCore.Qt.Checked
+                        else QtCore.Qt.Checked)
+            item.setCheckState(new_state)
+        self._update_summary()
 
     def _select_ai_recommended(self):
-        """Check only faces that Ollama recommended."""
         if not self.analysis:
             return
         recommended = {fi.index for fi in self.analysis.faces
                       if fi.ai_recommended}
+        if not recommended:
+            self._set_status("No AI recommendations available yet", "#e67e22")
+            return
         for row in range(self.table.rowCount()):
-            score_item = self.table.item(row, 1)
+            score_item = self.table.item(row, self.COL_SCORE)
             if score_item:
                 idx = int(score_item.data(QtCore.Qt.UserRole))
                 state = (QtCore.Qt.Checked if idx in recommended
                         else QtCore.Qt.Unchecked)
-                self.table.item(row, 0).setCheckState(state)
+                self.table.item(row, self.COL_CHECK).setCheckState(state)
+        self._update_summary()
+        self._set_status(
+            f"Selected {len(recommended)} AI-recommended face(s)", "#27ae60")
 
     def _apply_threshold(self, value):
-        """Check faces with score >= threshold, uncheck others."""
         if not self.analysis:
             return
         for row in range(self.table.rowCount()):
-            score_item = self.table.item(row, 1)
+            score_item = self.table.item(row, self.COL_SCORE)
             if score_item:
                 score = int(score_item.data(QtCore.Qt.DisplayRole))
                 state = (QtCore.Qt.Checked if score >= value
                         else QtCore.Qt.Unchecked)
-                self.table.item(row, 0).setCheckState(state)
+                self.table.item(row, self.COL_CHECK).setCheckState(state)
+        self._update_summary()
 
     def _reanalyze(self):
-        """Re-run analysis with current settings."""
-        # Save preferences
         prefs = {
             "url": self.txt_url.text(),
             "model": self.combo_model.currentText(),
@@ -368,13 +881,14 @@ class SmartSelectDialog(QtWidgets.QDialog):
         save_preferences(prefs)
         self._run_analysis()
 
+    # ── Result ────────────────────────────────────────────────────
+
     def get_selected_faces(self):
-        """Return list of face indices that are checked."""
         selected = []
         for row in range(self.table.rowCount()):
-            item = self.table.item(row, 0)
+            item = self.table.item(row, self.COL_CHECK)
             if item and item.checkState() == QtCore.Qt.Checked:
-                score_item = self.table.item(row, 1)
+                score_item = self.table.item(row, self.COL_SCORE)
                 if score_item:
                     selected.append(int(score_item.data(QtCore.Qt.UserRole)))
         return selected
