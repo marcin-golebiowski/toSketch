@@ -15,13 +15,22 @@ class MockVector:
     """Minimal FreeCAD.Vector replacement for 2D geometry tests."""
 
     def __init__(self, x=0.0, y=0.0, z=0.0):
-        self.x = float(x)
-        self.y = float(y)
-        self.z = float(z)
+        if isinstance(x, MockVector):
+            # Copy constructor: FreeCAD.Vector(other_vector)
+            self.x = x.x
+            self.y = x.y
+            self.z = x.z
+        else:
+            self.x = float(x)
+            self.y = float(y)
+            self.z = float(z)
 
     @property
     def Length(self):
         return math.sqrt(self.x ** 2 + self.y ** 2 + self.z ** 2)
+
+    def sub(self, other):
+        return MockVector(self.x - other.x, self.y - other.y, self.z - other.z)
 
     def __sub__(self, other):
         return MockVector(self.x - other.x, self.y - other.y, self.z - other.z)
@@ -29,8 +38,11 @@ class MockVector:
     def __add__(self, other):
         return MockVector(self.x + other.x, self.y + other.y, self.z + other.z)
 
-    def __mul__(self, scalar):
-        return MockVector(self.x * scalar, self.y * scalar, self.z * scalar)
+    def __mul__(self, other):
+        if isinstance(other, MockVector):
+            # FreeCAD Vector * Vector = dot product
+            return self.x * other.x + self.y * other.y + self.z * other.z
+        return MockVector(self.x * other, self.y * other, self.z * other)
 
     def __rmul__(self, scalar):
         return self.__mul__(scalar)
@@ -68,18 +80,109 @@ class MockLineSegment:
 
 class MockArcOfCircle:
     """Part.ArcOfCircle mock with start/end points on the arc."""
-    def __init__(self, center, radius, start_point, end_point):
-        self.Center = center
-        self.Radius = radius
-        self.StartPoint = start_point
-        self.EndPoint = end_point
+    def __init__(self, *args):
+        if len(args) == 4:
+            # (center, radius, start_point, end_point) — test convenience
+            self.Center = args[0]
+            self.Radius = args[1]
+            self.StartPoint = args[2]
+            self.EndPoint = args[3]
+        elif len(args) == 3:
+            # (circle, start_angle, end_angle) — FreeCAD API signature
+            circle = args[0]
+            start_angle = args[1]
+            end_angle = args[2]
+            self.Center = circle.Center
+            self.Radius = circle.Radius
+            self.StartPoint = MockVector(
+                circle.Center.x + circle.Radius * math.cos(start_angle),
+                circle.Center.y + circle.Radius * math.sin(start_angle))
+            self.EndPoint = MockVector(
+                circle.Center.x + circle.Radius * math.cos(end_angle),
+                circle.Center.y + circle.Radius * math.sin(end_angle))
+        else:
+            raise TypeError(f"MockArcOfCircle expects 3 or 4 args, got {len(args)}")
 
 
 class MockCircle:
-    """Part.Circle mock (full circle, no start/end points)."""
-    def __init__(self, center, radius):
+    """Part.Circle mock (full circle, no start/end points).
+
+    Supports two calling conventions:
+    - MockCircle(center, radius) — test convenience
+    - MockCircle(center, normal, radius) — FreeCAD API
+    - MockCircle() — default
+    """
+    def __init__(self, *args):
+        if len(args) == 0:
+            self.Center = MockVector(0, 0, 0)
+            self.Radius = 1.0
+        elif len(args) == 2:
+            self.Center = args[0]
+            self.Radius = args[1]
+        elif len(args) == 3:
+            self.Center = args[0]
+            # args[1] is the normal vector — ignored in mock
+            self.Radius = args[2]
+        else:
+            raise TypeError(f"MockCircle expects 0, 2, or 3 args, got {len(args)}")
+
+
+class MockBSplineCurve:
+    """Part.BSplineCurve mock for bspline2arc tests."""
+    TypeId = 'Part::GeomBSplineCurve'
+
+    def __init__(self, points, parameter_range=(0.0, 1.0)):
+        self._points = points
+        self._param_range = parameter_range
+        self.StartPoint = points[0]
+        self.EndPoint = points[-1]
+
+    @property
+    def ParameterRange(self):
+        return self._param_range
+
+    def value(self, t):
+        """Linear interpolation along stored points."""
+        frac = (t - self._param_range[0]) / (self._param_range[1] - self._param_range[0])
+        frac = max(0.0, min(1.0, frac))
+        idx = frac * (len(self._points) - 1)
+        i = int(idx)
+        if i >= len(self._points) - 1:
+            return self._points[-1]
+        f = idx - i
+        p1, p2 = self._points[i], self._points[i + 1]
+        return MockVector(
+            p1.x + f * (p2.x - p1.x),
+            p1.y + f * (p2.y - p1.y),
+            p1.z + f * (p2.z - p1.z))
+
+    def getPoles(self):
+        return list(self._points)
+
+    @property
+    def NbPoles(self):
+        return len(self._points)
+
+
+class MockPoint:
+    """Part.Point mock."""
+    TypeId = 'Part::GeomPoint'
+
+    def __init__(self, x=0.0, y=0.0, z=0.0):
+        self.x = float(x)
+        self.y = float(y)
+        self.z = float(z)
+        self.XYZ = MockVector(x, y, z)
+
+
+class MockEllipse:
+    """Part.Ellipse mock."""
+    TypeId = 'Part::GeomEllipse'
+
+    def __init__(self, center, major_radius, minor_radius):
         self.Center = center
-        self.Radius = radius
+        self.MajorRadius = major_radius
+        self.MinorRadius = minor_radius
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -123,6 +226,10 @@ class MockConstraint:
             self.FirstPos = args[1] if len(args) > 1 else None
             self.Second = args[2] if len(args) > 2 else None
             self.SecondPos = args[3] if len(args) > 3 else None
+        elif ctype == 'Angle':
+            self.First = args[0] if len(args) > 0 else None
+            self.Second = args[1] if len(args) > 1 else None
+            self.Value = args[2] if len(args) > 2 else None
 
     def __repr__(self):
         attrs = {k: v for k, v in self.__dict__.items() if v is not None}
@@ -147,6 +254,33 @@ class MockSketch:
         self.Constraints.append(constraint)
         return len(self.Constraints) - 1
 
+    def addGeometry(self, geo, construction=False):
+        self.Geometry.append(geo)
+        return len(self.Geometry) - 1
+
+    def delGeometry(self, index):
+        del self.Geometry[index]
+        # Remove constraints referencing this index and shift higher indices
+        new_constraints = []
+        for c in self.Constraints:
+            first = getattr(c, 'First', None)
+            second = getattr(c, 'Second', None)
+            if first == index or second == index:
+                continue  # remove constraints referencing deleted geometry
+            if first is not None and first > index:
+                c.First = first - 1
+            if second is not None and second > index:
+                c.Second = second - 1
+            new_constraints.append(c)
+        self.Constraints = new_constraints
+
+    @property
+    def GeometryCount(self):
+        return len(self.Geometry)
+
+    def recompute(self):
+        pass
+
 
 # ──────────────────────────────────────────────────────────────────
 # Install mocks into sys.modules BEFORE any import of constraint code
@@ -156,6 +290,10 @@ def _install_mocks():
     freecad = types.ModuleType('FreeCAD')
     freecad.Vector = MockVector
     freecad.ActiveDocument = types.SimpleNamespace(recompute=lambda: None)
+    freecad.Console = types.SimpleNamespace(
+        PrintMessage=lambda msg: None,
+        PrintError=lambda msg: None,
+    )
     sys.modules['FreeCAD'] = freecad
 
     # Part module
@@ -163,12 +301,26 @@ def _install_mocks():
     part.LineSegment = MockLineSegment
     part.ArcOfCircle = MockArcOfCircle
     part.Circle = MockCircle
+    part.BSplineCurve = MockBSplineCurve
+    part.Point = MockPoint
+    part.Ellipse = MockEllipse
     sys.modules['Part'] = part
 
     # Sketcher module
     sketcher = types.ModuleType('Sketcher')
     sketcher.Constraint = MockConstraint
     sys.modules['Sketcher'] = sketcher
+
+    # Draft module (used by toSharedFunc)
+    draft = types.ModuleType('Draft')
+    draft.makeSketch = lambda *a, **kw: None
+    sys.modules['Draft'] = draft
+
+    # FreeCADGui module (used by symmetricConstraints preview)
+    gui = types.ModuleType('FreeCADGui')
+    gui.ActiveDocument = types.SimpleNamespace(ActiveView=None)
+    gui.showMainWindow = lambda: None
+    sys.modules['FreeCADGui'] = gui
 
 
 _install_mocks()

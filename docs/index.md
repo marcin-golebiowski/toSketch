@@ -24,7 +24,7 @@ toSketch is a FreeCAD workbench for reverse-engineering existing 3D models. When
 | [Scale](tools/to-scale.md) | Scale objects imported from STEP files |
 | [Reset Origin](tools/reset-origin.md) | Fix origin placement for correct rotation of STEP imports |
 | [Plane to Part Plane](tools/plane-to-part-plane.md) | Convert a toPlane to a standard Part::Plane |
-| [BSpline to Arc](tools/bspline-to-arc.md) | Replace B-splines with circular arcs (Future) |
+| [BSpline to Arc](tools/bspline-to-arc.md) | Replace B-splines with circular arcs |
 
 ## Workflows
 
