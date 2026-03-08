@@ -63,6 +63,7 @@ class toSketch_Workbench ( FreeCADGui.Workbench ):
                     'ConstraintsGroupCmd', \
                     'toLineCurveFitCommand', \
                     'bSpline2ArcCommand', \
+                    'smartSelectCommand', \
                     'toCurveFitCommand', \
                     'toScaleCommand','toResetOriginCommand']
 
@@ -77,6 +78,7 @@ class toSketch_Workbench ( FreeCADGui.Workbench ):
                     'toLineCurveFitCommand', \
                     'toCurveFitCommand', \
                     'bSpline2ArcCommand', \
+                    'smartSelectCommand', \
                     'toScaleCommand','toResetOriginCommand']
 
         import PartGui

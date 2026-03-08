@@ -186,6 +186,71 @@ class MockEllipse:
 
 
 # ──────────────────────────────────────────────────────────────────
+# Face / Shape mocks (for faceAnalysis tests)
+# ──────────────────────────────────────────────────────────────────
+class MockSurface:
+    """Mock for face.Surface — str(face.Surface) returns '<Type object>'."""
+    def __init__(self, type_name="Plane"):
+        self._type = type_name
+    def __str__(self):
+        return f"<{self._type} object>"
+
+
+class MockBoundBox:
+    """Mock for face.BoundBox."""
+    def __init__(self, xmin=0, ymin=0, zmin=0, xmax=10, ymax=10, zmax=0):
+        self.XMin = xmin
+        self.YMin = ymin
+        self.ZMin = zmin
+        self.XMax = xmax
+        self.YMax = ymax
+        self.ZMax = zmax
+
+
+class MockEdge:
+    """Minimal edge mock."""
+    def __init__(self, length=1.0):
+        self.Length = length
+
+
+class MockFace:
+    """Mock for a TopoDS_Face."""
+    def __init__(self, surface_type="Plane", area=100.0, edge_count=4,
+                 normal=(0, 0, 1), center=(0, 0, 0), bbox=None):
+        self.Surface = MockSurface(surface_type)
+        self.Area = area
+        self.Edges = [MockEdge() for _ in range(edge_count)]
+        self._normal = normal
+        self.CenterOfMass = MockVector(*center)
+        self.BoundBox = bbox or MockBoundBox()
+
+    def normalAt(self, u, v):
+        return MockVector(*self._normal)
+
+    @property
+    def ParameterRange(self):
+        return (0.0, 1.0, 0.0, 1.0)
+
+
+class MockSolid:
+    """Mock for a TopoDS_Solid containing faces."""
+    def __init__(self, faces=None):
+        self.Faces = faces or []
+        self.ShapeType = "Solid"
+
+
+class MockShape:
+    """Mock for Part.Shape (Compound/Solid/Shell)."""
+    def __init__(self, faces=None, solids=None):
+        self.Faces = faces or []
+        self.Solids = solids or []
+        if solids:
+            self.ShapeType = "Compound"
+        else:
+            self.ShapeType = "Shell"
+
+
+# ──────────────────────────────────────────────────────────────────
 # Constraint mock
 # ──────────────────────────────────────────────────────────────────
 class MockConstraint:

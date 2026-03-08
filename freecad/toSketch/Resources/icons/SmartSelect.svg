@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Face/surface outline -->
+  <rect x="8" y="12" width="36" height="28" rx="2" fill="none" stroke="#2c3e50" stroke-width="2.5"/>
+  <!-- Selection checkmark -->
+  <polyline points="14,26 20,32 32,20" fill="none" stroke="#27ae60" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- AI sparkle/star -->
+  <path d="M50,10 L52,16 L58,18 L52,20 L50,26 L48,20 L42,18 L48,16 Z" fill="#f39c12" stroke="#e67e22" stroke-width="0.5"/>
+  <path d="M54,32 L55,35 L58,36 L55,37 L54,40 L53,37 L50,36 L53,35 Z" fill="#f39c12" stroke="#e67e22" stroke-width="0.5"/>
+  <!-- Score bar -->
+  <rect x="10" y="46" width="44" height="6" rx="3" fill="#ecf0f1" stroke="#bdc3c7" stroke-width="1"/>
+  <rect x="10" y="46" width="33" height="6" rx="3" fill="#3498db"/>
+  <!-- Small face grid hint -->
+  <line x1="20" y1="12" x2="20" y2="40" stroke="#bdc3c7" stroke-width="0.5" stroke-dasharray="2,2"/>
+  <line x1="32" y1="12" x2="32" y2="40" stroke="#bdc3c7" stroke-width="0.5" stroke-dasharray="2,2"/>
+  <line x1="8" y1="24" x2="44" y2="24" stroke="#bdc3c7" stroke-width="0.5" stroke-dasharray="2,2"/>
+</svg>

@@ -1992,6 +1992,49 @@ class addDimensionConstraintsFeature:
             ),
         }
 
+class SmartSelectFeature:
+
+    def Activated(self):
+        from .faceAnalysis import full_analysis
+        from .smartSelectDialog import SmartSelectDialog
+
+        selectEx = FreeCADGui.Selection.getSelectionEx()
+        if not selectEx:
+            FreeCAD.Console.PrintError("Select a STEP object first\n")
+            return
+
+        obj = selectEx[0].Object
+        if not hasattr(obj, 'Shape'):
+            FreeCAD.Console.PrintError(
+                f"{obj.Label} has no Shape — select a solid or compound\n")
+            return
+
+        dialog = SmartSelectDialog(obj.Shape, obj=obj)
+        if dialog.exec_() == QtWidgets.QDialog.Accepted:
+            selected = dialog.get_selected_faces()
+            FreeCADGui.Selection.clearSelection()
+            for idx in selected:
+                FreeCADGui.Selection.addSelection(
+                    obj, f"Face{idx + 1}")
+            FreeCAD.Console.PrintMessage(
+                f"Selected {len(selected)} face(s) for sketch extraction\n")
+
+    def IsActive(self):
+        if FreeCAD.ActiveDocument is None:
+            return False
+        return FreeCADGui.Selection.getSelectionEx() != []
+
+    def GetResources(self):
+        return {
+            'Pixmap': 'SmartSelect',
+            'MenuText': QtCore.QT_TRANSLATE_NOOP(
+                'SmartSelectFeature', 'Smart Face Selection'),
+            'ToolTip': QtCore.QT_TRANSLATE_NOOP(
+                'SmartSelectFeature',
+                'AI-assisted face selection for sketch extraction'),
+        }
+
+
 FreeCADGui.addCommand('toSketchCommand',toSketchFeature())
 FreeCADGui.addCommand('section2SketchCommand',section2SketchFeature())
 FreeCADGui.addCommand('Plane2PartPlaneCommand',toPlane2PartFeature())
@@ -2014,3 +2057,4 @@ FreeCADGui.addCommand('toSPlaneCommand',toSPlaneFeature())
 FreeCADGui.addCommand('toScaleCommand',toScaleFeature())
 FreeCADGui.addCommand('toResetOriginCommand',toResetOriginFeature())
 FreeCADGui.addCommand('toShapeInfoCommand',toShapeInfoFeature())
+FreeCADGui.addCommand('smartSelectCommand',SmartSelectFeature())
