@@ -535,15 +535,15 @@ class SmartSelectDialog(QtWidgets.QDialog):
         group_text = self.combo_group_filter.currentText()
         if group_text != "All":
             group_name = group_text.split("(")[0].strip()
-            if fi.ai_group != group_name:
-                # Also check normal-based groups
-                in_normal_group = False
-                for g, indices in (self.analysis.groups or {}).items():
-                    if g == group_name and fi.index in indices:
-                        in_normal_group = True
-                        break
-                if not in_normal_group:
-                    return False
+            # Check AI group match
+            if fi.ai_group == group_name:
+                return True
+            # Check normal-based groups
+            groups = (self.analysis.groups if self.analysis else None) or {}
+            for g, indices in groups.items():
+                if g == group_name and fi.index in indices:
+                    return True
+            return False
 
         return True
 

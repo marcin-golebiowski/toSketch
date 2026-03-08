@@ -23,6 +23,7 @@ class OllamaConfigDialog(QtWidgets.QDialog):
         self.setWindowTitle("Ollama AI Configuration")
         self.setMinimumSize(600, 520)
         self._model_details = {}
+        self._model_details_lock = threading.Lock()
         self._build_ui()
         self._load_preferences()
         self._check_connection()
@@ -310,16 +311,18 @@ class OllamaConfigDialog(QtWidgets.QDialog):
         if not model_name:
             return
         # Check cache first
-        if model_name in self._model_details:
-            self._show_model_info(self._model_details[model_name])
-            return
+        with self._model_details_lock:
+            if model_name in self._model_details:
+                self._show_model_info(self._model_details[model_name])
+                return
 
         self.lbl_model_info.setText("Loading model info...")
 
         def _load():
             prefs = {"url": self.txt_url.text().strip() or _DEFAULTS["url"]}
             info = get_model_info(model_name, prefs)
-            self._model_details[model_name] = info
+            with self._model_details_lock:
+                self._model_details[model_name] = info
             QtCore.QMetaObject.invokeMethod(
                 self, "_on_model_info_loaded",
                 QtCore.Qt.QueuedConnection,

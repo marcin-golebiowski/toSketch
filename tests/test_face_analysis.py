@@ -5,6 +5,7 @@ import pytest
 from conftest import MockVector, MockFace, MockShape, MockSolid, MockSurface, MockBoundBox
 
 from freecad.toSketch.faceAnalysis import (
+    _median,
     classify_surface,
     analyze_face,
     analyze_shape,
@@ -16,6 +17,29 @@ from freecad.toSketch.faceAnalysis import (
     FaceInfo,
     AnalysisResult,
 )
+
+
+# ── _median ──────────────────────────────────────────────────────
+class TestMedian:
+
+    def test_odd_length(self):
+        assert _median([3, 1, 2]) == 2
+
+    def test_even_length(self):
+        assert _median([4, 1, 3, 2]) == 2.5
+
+    def test_even_length_not_upper_median(self):
+        """Regression: old code returned sorted[n//2] which is upper-median."""
+        values = [10, 20, 30, 40]
+        # Old code: sorted([10,20,30,40])[2] = 30 (upper-median)
+        # Correct: (20+30)/2 = 25.0
+        assert _median(values) == 25.0
+
+    def test_single_element(self):
+        assert _median([42]) == 42
+
+    def test_two_elements(self):
+        assert _median([10, 20]) == 15.0
 
 
 # ── classify_surface ──────────────────────────────────────────────
@@ -188,6 +212,18 @@ class TestDetectProfileFaces:
     def test_empty_faces(self):
         assert detect_profile_faces([]) == []
 
+    def test_even_face_count_uses_correct_median(self):
+        """Regression: detect_profile_faces used upper-median for even lists."""
+        faces = [
+            FaceInfo(0, "Plane", 10.0, (0, 0, 1), 8, (), True, (), 0),
+            FaceInfo(1, "Plane", 20.0, (0, 0, 1), 8, (), True, (), 0),
+            FaceInfo(2, "Plane", 30.0, (0, 0, 1), 8, (), True, (), 0),
+            FaceInfo(3, "Plane", 40.0, (0, 0, 1), 8, (), True, (), 0),
+        ]
+        profiles = detect_profile_faces(faces)
+        # All faces have area > median*0.1, 8 edges, axis-aligned — all qualify
+        assert len(profiles) == 4
+
 
 # ── score_faces ───────────────────────────────────────────────────
 class TestScoreFaces:
@@ -242,6 +278,19 @@ class TestScoreFaces:
         # Median is 50, so face 1 should score highest on area component
         # (though other factors may also differ)
         assert scored[1].algo_score >= scored[0].algo_score
+
+    def test_even_face_count_uses_correct_median(self):
+        """Regression: score_faces used upper-median for even-length lists."""
+        faces = [
+            FaceInfo(0, "Plane", 10.0, (0, 0, 1), 4, (), True, (), 0),
+            FaceInfo(1, "Plane", 20.0, (0, 0, 1), 4, (), True, (), 0),
+            FaceInfo(2, "Plane", 30.0, (0, 0, 1), 4, (), True, (), 0),
+            FaceInfo(3, "Plane", 40.0, (0, 0, 1), 4, (), True, (), 0),
+        ]
+        scored = score_faces(faces)
+        # All should get valid scores — regression was wrong median value
+        for fi in scored:
+            assert 0.0 <= fi.algo_score <= 100.0
 
 
 # ── full_analysis ─────────────────────────────────────────────────

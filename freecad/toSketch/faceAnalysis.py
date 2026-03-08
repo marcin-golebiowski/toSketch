@@ -50,6 +50,15 @@ _PRINCIPAL_AXES = [
 ]
 
 
+def _median(values):
+    """Return the median of a list of numbers."""
+    s = sorted(values)
+    n = len(s)
+    if n % 2 == 1:
+        return s[n // 2]
+    return (s[n // 2 - 1] + s[n // 2]) / 2.0
+
+
 def classify_surface(face):
     """Classify face surface type from str(face.Surface).
 
@@ -211,7 +220,7 @@ def detect_profile_faces(faces):
     areas = [fi.area for fi in faces if fi.area > 0]
     if not areas:
         return []
-    median_area = sorted(areas)[len(areas) // 2]
+    median_area = _median(areas)
 
     profile_indices = []
     for fi in faces:
@@ -253,7 +262,7 @@ def score_faces(faces):
     areas = [fi.area for fi in faces if fi.area > 0]
     if not areas:
         return faces
-    median_area = sorted(areas)[len(areas) // 2]
+    median_area = _median(areas)
     max_area = max(areas)
 
     edge_counts = [fi.edge_count for fi in faces]

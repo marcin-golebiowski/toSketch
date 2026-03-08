@@ -20,7 +20,7 @@ def _make_face_info(index, surface_type="Plane", area=100.0, edge_count=4,
                     normal=(0, 0, 1), center=(0, 0, 0), score=50.0):
     return FaceInfo(
         index=index, surface_type=surface_type, area=area,
-        normal=normal, edge_count=edge_count, bounding_box=(),
+        normal=normal, edge_count=edge_count, bounding_box=(0, 0, 0, 10, 10, 0),
         is_planar=(surface_type == "Plane"), center_of_mass=center,
         parent_solid_index=0, algo_score=score,
     )
@@ -228,3 +228,13 @@ class TestApplyAnnotations:
         faces = [_make_face_info(0)]
         strategy = apply_ollama_annotations(faces, None)
         assert strategy == ""
+
+
+# ── FaceInfo bounding_box ────────────────────────────────────────
+class TestFaceInfoBoundingBox:
+
+    def test_bounding_box_is_6_tuple(self):
+        """Regression: bounding_box was empty tuple instead of 6-tuple."""
+        fi = _make_face_info(0)
+        assert len(fi.bounding_box) == 6
+        assert fi.bounding_box == (0, 0, 0, 10, 10, 0)
