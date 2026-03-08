@@ -20,7 +20,7 @@ toSketch is a FreeCAD workbench for reverse-engineering existing 3D models. When
 | [Export to Macro](tools/export-to-macro.md) | Export a sketch as a Python macro (.FCMacro) |
 | [Line Curve Fit](tools/to-line-curve-fit.md) | Merge collinear lines and fit B-spline curves (Alpha) |
 | [Curve Fit](tools/to-curve-fit.md) | Fit B-splines to line endpoints (Alpha) |
-| [Constraints](tools/constraints.md) | Auto-detect and add coincident, horizontal, vertical, parallel, and symmetry constraints |
+| [Constraints](tools/constraints.md) | Auto-detect and add coincident, horizontal, vertical, parallel, symmetry, equal, tangent, and dimension constraints |
 | [Scale](tools/to-scale.md) | Scale objects imported from STEP files |
 | [Reset Origin](tools/reset-origin.md) | Fix origin placement for correct rotation of STEP imports |
 | [Plane to Part Plane](tools/plane-to-part-plane.md) | Convert a toPlane to a standard Part::Plane |

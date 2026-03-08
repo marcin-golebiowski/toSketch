@@ -1475,6 +1475,20 @@ class toMacroFeature:
                 fp.write('sketch.addConstraint(Sketcher.Constraint("Angle",')
                 fp.write(str(i.First)+','+str(i.FirstPos)+','+str(i.Second))
                 fp.write(','+str(i.SecondPos)+','+str(i.Value)+'))\n')
+           elif i.Type == 'Tangent' :
+             if hasattr(i,'Second') :
+                fp.write('sketch.addConstraint(Sketcher.Constraint("Tangent",')
+                fp.write(str(i.First)+','+str(i.FirstPos)+','+str(i.Second))
+                fp.write(','+str(i.SecondPos)+'))\n')
+             else :
+                fp.write('sketch.addConstraint(Sketcher.Constraint("Tangent",')
+                fp.write(str(i.First)+'))\n')
+           elif i.Type == 'Radius' :
+             fp.write('sketch.addConstraint(Sketcher.Constraint("Radius",')
+             fp.write(str(i.First)+','+str(i.Value)+'))\n')
+           elif i.Type == 'Distance' :
+             fp.write('sketch.addConstraint(Sketcher.Constraint("Distance",')
+             fp.write(str(i.First)+','+str(i.Value)+'))\n')
         fp.write("print('Constraints added to Sketch : '+sketch.Label)\n")
         fp.close()
         print('Macro : '+sketch.Label+' Written')
@@ -1782,6 +1796,9 @@ class ConstraintsGroupFeature:
                 "CheckHorizontalCmd",
                 "CheckVerticalCmd",
                 "addParallelCmd",
+                "addEqualCmd",
+                "addTangentCmd",
+                "addDimensionCmd",
                 )
 
     def GetResources(self):
@@ -1951,6 +1968,93 @@ class addParallelConstraintsFeature:
                "AddParallelCmd", "Add Parallel Constraints Command"
             ),
         }
+class addEqualConstraintsFeature:
+    """Add Equal constraints between lines of equal length or arcs of equal radius."""
+    def Activated(self):
+        from freecad.toSketch.addEqualConstraints import add_equal_constraints
+        print("Activate addEqualConstraints")
+
+        sel = FreeCADGui.Selection.getSelection()
+        if sel and sel[0].TypeId == 'Sketcher::SketchObject':
+            add_equal_constraints(sel[0])
+        else:
+            print("Please select a Sketch first.")
+
+    def IsActive(self):
+        if FreeCAD.ActiveDocument is None:
+            return False
+        else:
+            return True
+
+    def GetResources(self):
+        return {
+            "Pixmap": "AddEqualCmd",
+            "MenuText": QtCore.QT_TRANSLATE_NOOP(
+                "AddEqualCmd", "Add Equal Constraints Command"
+            ),
+            "ToolTip": QtCore.QT_TRANSLATE_NOOP(
+                "AddEqualCmd", "Add Equal Constraints Command"
+            ),
+        }
+
+class addTangentConstraintsFeature:
+    """Add Tangent constraints at line-arc and arc-arc junctions."""
+    def Activated(self):
+        from freecad.toSketch.addTangentConstraints import add_tangent_constraints
+        print("Activate addTangentConstraints")
+
+        sel = FreeCADGui.Selection.getSelection()
+        if sel and sel[0].TypeId == 'Sketcher::SketchObject':
+            add_tangent_constraints(sel[0])
+        else:
+            print("Please select a Sketch first.")
+
+    def IsActive(self):
+        if FreeCAD.ActiveDocument is None:
+            return False
+        else:
+            return True
+
+    def GetResources(self):
+        return {
+            "Pixmap": "AddTangentCmd",
+            "MenuText": QtCore.QT_TRANSLATE_NOOP(
+                "AddTangentCmd", "Add Tangent Constraints Command"
+            ),
+            "ToolTip": QtCore.QT_TRANSLATE_NOOP(
+                "AddTangentCmd", "Add Tangent Constraints Command"
+            ),
+        }
+
+class addDimensionConstraintsFeature:
+    """Add Distance and Radius constraints with round-number snapping."""
+    def Activated(self):
+        from freecad.toSketch.addDimensionConstraints import add_dimension_constraints
+        print("Activate addDimensionConstraints")
+
+        sel = FreeCADGui.Selection.getSelection()
+        if sel and sel[0].TypeId == 'Sketcher::SketchObject':
+            add_dimension_constraints(sel[0])
+        else:
+            print("Please select a Sketch first.")
+
+    def IsActive(self):
+        if FreeCAD.ActiveDocument is None:
+            return False
+        else:
+            return True
+
+    def GetResources(self):
+        return {
+            "Pixmap": "AddDimensionCmd",
+            "MenuText": QtCore.QT_TRANSLATE_NOOP(
+                "AddDimensionCmd", "Add Dimension Constraints Command"
+            ),
+            "ToolTip": QtCore.QT_TRANSLATE_NOOP(
+                "AddDimensionCmd", "Add Dimension Constraints Command"
+            ),
+        }
+
 FreeCADGui.addCommand('toSketchCommand',toSketchFeature())
 FreeCADGui.addCommand('section2SketchCommand',section2SketchFeature())
 FreeCADGui.addCommand('Plane2PartPlaneCommand',toPlane2PartFeature())
@@ -1960,6 +2064,9 @@ FreeCADGui.addCommand('CheckCoincidentCmd',CheckCoincidentFeature())
 FreeCADGui.addCommand('CheckVerticalCmd',CheckVerticalFeature())
 FreeCADGui.addCommand('addParallelCmd',addParallelConstraintsFeature())
 FreeCADGui.addCommand('CheckHorizontalCmd',CheckHorizontalFeature())
+FreeCADGui.addCommand('addEqualCmd',addEqualConstraintsFeature())
+FreeCADGui.addCommand('addTangentCmd',addTangentConstraintsFeature())
+FreeCADGui.addCommand('addDimensionCmd',addDimensionConstraintsFeature())
 FreeCADGui.addCommand('removeOuterBoxCommand',removeOuterBoxFeature())
 FreeCADGui.addCommand('addBboxCommand',addBboxFeature())
 FreeCADGui.addCommand('toLineCurveFitCommand',toLineCurveFitFeature())
