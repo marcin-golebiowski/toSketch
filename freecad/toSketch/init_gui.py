@@ -64,6 +64,7 @@ class toSketch_Workbench ( FreeCADGui.Workbench ):
                     'toLineCurveFitCommand', \
                     'bSpline2ArcCommand', \
                     'smartSelectCommand', \
+                    'ollamaConfigCommand', \
                     'toCurveFitCommand', \
                     'toScaleCommand','toResetOriginCommand']
 
@@ -79,6 +80,7 @@ class toSketch_Workbench ( FreeCADGui.Workbench ):
                     'toCurveFitCommand', \
                     'bSpline2ArcCommand', \
                     'smartSelectCommand', \
+                    'ollamaConfigCommand', \
                     'toScaleCommand','toResetOriginCommand']
 
         import PartGui

@@ -2035,6 +2035,27 @@ class SmartSelectFeature:
         }
 
 
+class OllamaConfigFeature:
+
+    def Activated(self):
+        from .ollamaConfigDialog import OllamaConfigDialog
+        dialog = OllamaConfigDialog()
+        dialog.exec_()
+
+    def IsActive(self):
+        return True
+
+    def GetResources(self):
+        return {
+            'Pixmap': 'OllamaConfig',
+            'MenuText': QtCore.QT_TRANSLATE_NOOP(
+                'OllamaConfigFeature', 'Ollama AI Settings'),
+            'ToolTip': QtCore.QT_TRANSLATE_NOOP(
+                'OllamaConfigFeature',
+                'Configure Ollama connection, model, and prompt settings'),
+        }
+
+
 FreeCADGui.addCommand('toSketchCommand',toSketchFeature())
 FreeCADGui.addCommand('section2SketchCommand',section2SketchFeature())
 FreeCADGui.addCommand('Plane2PartPlaneCommand',toPlane2PartFeature())
@@ -2058,3 +2079,4 @@ FreeCADGui.addCommand('toScaleCommand',toScaleFeature())
 FreeCADGui.addCommand('toResetOriginCommand',toResetOriginFeature())
 FreeCADGui.addCommand('toShapeInfoCommand',toShapeInfoFeature())
 FreeCADGui.addCommand('smartSelectCommand',SmartSelectFeature())
+FreeCADGui.addCommand('ollamaConfigCommand',OllamaConfigFeature())

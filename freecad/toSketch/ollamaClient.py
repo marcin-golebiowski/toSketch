@@ -11,6 +11,12 @@ _DEFAULTS = {
     "model": "llama3.2",
     "timeout": 60,
     "enabled": True,
+    "temperature": 0.3,
+    "system_prompt": (
+        "You are a CAD geometry analyst. Given faces from a STEP file, "
+        "respond ONLY with valid JSON. Identify mounting faces, bore/hole "
+        "profiles, structural features, and the best faces for sketch extraction."
+    ),
 }
 
 
@@ -29,6 +35,8 @@ def get_preferences():
             "model": grp.GetString("OllamaModel", _DEFAULTS["model"]),
             "timeout": grp.GetInt("OllamaTimeout", _DEFAULTS["timeout"]),
             "enabled": grp.GetBool("OllamaEnabled", _DEFAULTS["enabled"]),
+            "temperature": grp.GetFloat("OllamaTemperature", _DEFAULTS["temperature"]),
+            "system_prompt": grp.GetString("OllamaSystemPrompt", _DEFAULTS["system_prompt"]),
         }
     except Exception:
         return dict(_DEFAULTS)
@@ -44,6 +52,8 @@ def save_preferences(prefs):
         grp.SetString("OllamaModel", prefs.get("model", _DEFAULTS["model"]))
         grp.SetInt("OllamaTimeout", prefs.get("timeout", _DEFAULTS["timeout"]))
         grp.SetBool("OllamaEnabled", prefs.get("enabled", _DEFAULTS["enabled"]))
+        grp.SetFloat("OllamaTemperature", prefs.get("temperature", _DEFAULTS["temperature"]))
+        grp.SetString("OllamaSystemPrompt", prefs.get("system_prompt", _DEFAULTS["system_prompt"]))
     except Exception:
         pass
 
@@ -86,21 +96,50 @@ def list_ollama_models(prefs=None):
         return []
 
 
+def get_model_info(model_name, prefs=None):
+    """Get details about a specific model from Ollama.
+
+    Returns:
+        Dict with keys like 'name', 'size', 'parameter_size', 'family',
+        or empty dict on failure.
+    """
+    if prefs is None:
+        prefs = get_preferences()
+    url = prefs["url"].rstrip("/") + "/api/show"
+    try:
+        payload = json.dumps({"name": model_name}).encode("utf-8")
+        req = urllib.request.Request(
+            url, data=payload, method="POST",
+            headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+            details = data.get("details", {})
+            model_info = data.get("model_info", {})
+            return {
+                "name": model_name,
+                "family": details.get("family", ""),
+                "parameter_size": details.get("parameter_size", ""),
+                "quantization": details.get("quantization_level", ""),
+                "format": details.get("format", ""),
+            }
+    except Exception:
+        return {}
+
+
 def build_prompt(faces, groups):
-    """Build a structured prompt for Ollama from face analysis data.
+    """Build the user prompt for Ollama from face analysis data.
 
     Args:
         faces: List of FaceInfo objects.
         groups: Dict mapping group name to face indices.
 
     Returns:
-        Prompt string.
+        Prompt string (user portion — system prompt is sent separately).
     """
     lines = [
-        "You are a CAD geometry analyst. Analyze the following faces from a "
-        "STEP file and respond ONLY with valid JSON (no markdown, no explanation).",
+        "Analyze the following faces and respond ONLY with valid JSON.",
         "",
-        "Provide this JSON structure:",
+        "Required JSON structure:",
         '{',
         '  "face_annotations": [{"index": 0, "name": "descriptive name", "group": "group name"}, ...],',
         '  "scoring_adjustments": [{"index": 0, "boost": 15, "reason": "why"}, ...],',
@@ -113,7 +152,7 @@ def build_prompt(faces, groups):
 
     for fi in faces:
         parts = [f"Face {fi.index}: {fi.surface_type}"]
-        parts.append(f"area={fi.area:.1f}mm²")
+        parts.append(f"area={fi.area:.1f}mm\u00b2")
         parts.append(f"{fi.edge_count} edges")
         parts.append(f"normal=({fi.normal[0]:.2f},{fi.normal[1]:.2f},{fi.normal[2]:.2f})")
         parts.append(f"center=({fi.center_of_mass[0]:.1f},{fi.center_of_mass[1]:.1f},{fi.center_of_mass[2]:.1f})")
@@ -125,12 +164,6 @@ def build_prompt(faces, groups):
         lines.append("Normal-based groups:")
         for name, indices in groups.items():
             lines.append(f"  {name}: faces {indices}")
-
-    lines.append("")
-    lines.append(
-        "Focus on identifying: mounting faces, bore/hole profiles, "
-        "structural features, and the best faces for sketch extraction."
-    )
 
     return "\n".join(lines)
 
@@ -149,12 +182,19 @@ def query_ollama(prompt, prefs=None):
         prefs = get_preferences()
 
     url = prefs["url"].rstrip("/") + "/api/generate"
-    payload = json.dumps({
+    body = {
         "model": prefs["model"],
         "prompt": prompt,
         "stream": False,
         "format": "json",
-    }).encode("utf-8")
+    }
+    system_prompt = prefs.get("system_prompt", _DEFAULTS["system_prompt"])
+    if system_prompt:
+        body["system"] = system_prompt
+    temperature = prefs.get("temperature", _DEFAULTS["temperature"])
+    if temperature is not None:
+        body["options"] = {"temperature": temperature}
+    payload = json.dumps(body).encode("utf-8")
 
     req = urllib.request.Request(
         url, data=payload, method="POST",

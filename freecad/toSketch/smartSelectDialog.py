@@ -286,48 +286,41 @@ class SmartSelectDialog(QtWidgets.QDialog):
 
         layout.addLayout(btn_layout)
 
-        # ── Collapsible Settings Panel ──
-        self.settings_toggle = QtWidgets.QPushButton("Settings  \u25bc")
-        self.settings_toggle.setFlat(True)
-        self.settings_toggle.setStyleSheet(
-            "QPushButton { text-align: left; color: #666; font-size: 11px; "
-            "padding: 2px 0; } QPushButton:hover { color: #333; }")
-        self.settings_toggle.clicked.connect(self._toggle_settings)
-        layout.addWidget(self.settings_toggle)
-
-        self.settings_widget = QtWidgets.QWidget()
-        settings_layout = QtWidgets.QHBoxLayout(self.settings_widget)
-        settings_layout.setContentsMargins(4, 0, 4, 4)
-        settings_layout.setSpacing(8)
-
-        settings_layout.addWidget(QtWidgets.QLabel("Ollama Model:"))
-        self.combo_model = QtWidgets.QComboBox()
-        self.combo_model.setEditable(True)
-        self.combo_model.setMinimumWidth(150)
-        settings_layout.addWidget(self.combo_model)
-
-        settings_layout.addWidget(QtWidgets.QLabel("URL:"))
-        self.txt_url = QtWidgets.QLineEdit()
-        self.txt_url.setMinimumWidth(200)
-        settings_layout.addWidget(self.txt_url)
+        # ── Inline Settings Bar ──
+        settings_bar = QtWidgets.QHBoxLayout()
+        settings_bar.setSpacing(8)
 
         self.chk_ai = QtWidgets.QCheckBox("Enable AI")
-        settings_layout.addWidget(self.chk_ai)
+        self.chk_ai.setStyleSheet("font-size: 11px;")
+        settings_bar.addWidget(self.chk_ai)
+
+        self.lbl_model_badge = QtWidgets.QLabel("")
+        self.lbl_model_badge.setStyleSheet(
+            "background: #ecf0f1; border: 1px solid #bdc3c7; border-radius: 3px; "
+            "padding: 1px 6px; font-size: 11px; color: #555;")
+        settings_bar.addWidget(self.lbl_model_badge)
 
         btn_reanalyze = QtWidgets.QPushButton("Re-analyze")
         btn_reanalyze.setStyleSheet(
-            "QPushButton { background: #2980b9; color: white; padding: 4px 12px; "
-            "border-radius: 3px; } QPushButton:hover { background: #3498db; }")
+            "QPushButton { background: #2980b9; color: white; padding: 3px 10px; "
+            "border-radius: 3px; font-size: 11px; }"
+            "QPushButton:hover { background: #3498db; }")
         btn_reanalyze.clicked.connect(self._reanalyze)
-        settings_layout.addWidget(btn_reanalyze)
+        settings_bar.addWidget(btn_reanalyze)
 
-        settings_layout.addStretch()
-        self.settings_widget.setVisible(False)  # collapsed by default
-        layout.addWidget(self.settings_widget)
+        btn_config = QtWidgets.QPushButton("Ollama Settings...")
+        btn_config.setStyleSheet(
+            "QPushButton { padding: 3px 10px; border-radius: 3px; "
+            "font-size: 11px; }")
+        btn_config.clicked.connect(self._open_config_dialog)
+        settings_bar.addWidget(btn_config)
+
+        settings_bar.addStretch()
+        layout.addLayout(settings_bar)
 
         # ── Progress Bar ──
         self.progress = QtWidgets.QProgressBar()
-        self.progress.setRange(0, 0)  # indeterminate
+        self.progress.setRange(0, 0)
         self.progress.setFixedHeight(4)
         self.progress.setStyleSheet(
             "QProgressBar { border: none; background: transparent; }"
@@ -337,7 +330,7 @@ class SmartSelectDialog(QtWidgets.QDialog):
 
         # ── Status Bar ──
         status_layout = QtWidgets.QHBoxLayout()
-        status_layout.setContentsMargins(0, 0, 0, 0)
+        status_layout.setContentsMargins(0, 4, 0, 0)
 
         self.lbl_statusbar = QtWidgets.QLabel("")
         self.lbl_statusbar.setStyleSheet("color: #888; font-size: 11px;")
@@ -365,45 +358,56 @@ class SmartSelectDialog(QtWidgets.QDialog):
 
         # Load preferences
         prefs = get_preferences()
-        self.txt_url.setText(prefs["url"])
-        self.combo_model.addItem(prefs["model"])
         self.chk_ai.setChecked(prefs["enabled"])
+        self._update_model_badge(prefs)
 
         self._load_models_async(prefs)
 
-    # ── Settings collapse ─────────────────────────────────────────
+    # ── Config dialog ────────────────────────────────────────────
 
-    def _toggle_settings(self):
-        visible = not self.settings_widget.isVisible()
-        self.settings_widget.setVisible(visible)
-        self.settings_toggle.setText(
-            "Settings  \u25b2" if visible else "Settings  \u25bc")
+    def _open_config_dialog(self):
+        from .ollamaConfigDialog import OllamaConfigDialog
+        dialog = OllamaConfigDialog(self)
+        if dialog.exec_() == QtWidgets.QDialog.Accepted:
+            # Reload preferences after config changes
+            prefs = get_preferences()
+            self.chk_ai.setChecked(prefs["enabled"])
+            self._update_model_badge(prefs)
+
+    def _update_model_badge(self, prefs=None):
+        if prefs is None:
+            prefs = get_preferences()
+        self.lbl_model_badge.setText(
+            f"Model: {prefs['model']}  |  T={prefs.get('temperature', 0.3):.1f}")
 
     # ── Model loading ─────────────────────────────────────────────
 
     def _load_models_async(self, prefs):
+        """Check connection status in background on dialog open."""
         def _load():
-            models = list_ollama_models(prefs)
-            if models:
-                QtCore.QMetaObject.invokeMethod(
-                    self, "_update_model_list",
-                    QtCore.Qt.QueuedConnection,
-                    QtCore.Q_ARG(list, models))
+            available = check_ollama_available(prefs)
+            if available:
+                models = list_ollama_models(prefs)
+                count = len(models)
+            else:
+                count = 0
+            # Just update status — model selection is in config dialog
+            QtCore.QMetaObject.invokeMethod(
+                self, "_on_connection_checked",
+                QtCore.Qt.QueuedConnection,
+                QtCore.Q_ARG(bool, available),
+                QtCore.Q_ARG(int, count))
         t = threading.Thread(target=_load, daemon=True)
         t.start()
 
-    @QtCore.Slot(list)
-    def _update_model_list(self, models):
-        current = self.combo_model.currentText()
-        self.combo_model.clear()
-        for m in models:
-            self.combo_model.addItem(m)
-        idx = self.combo_model.findText(current)
-        if idx >= 0:
-            self.combo_model.setCurrentIndex(idx)
+    @QtCore.Slot(bool, int)
+    def _on_connection_checked(self, available, model_count):
+        if available:
+            self._set_status(
+                f"Ollama online ({model_count} models)", "#27ae60")
         else:
-            self.combo_model.addItem(current)
-            self.combo_model.setCurrentIndex(self.combo_model.count() - 1)
+            self._set_status(
+                "Ollama offline \u2014 algorithmic scoring only", "#e67e22")
 
     # ── Analysis ──────────────────────────────────────────────────
 
@@ -420,16 +424,11 @@ class SmartSelectDialog(QtWidgets.QDialog):
             self._set_status("AI disabled — algorithmic scoring only", "#888")
 
     def _start_ollama_query(self):
-        prefs = {
-            "url": self.txt_url.text(),
-            "model": self.combo_model.currentText(),
-            "timeout": get_preferences().get("timeout", 60),
-            "enabled": True,
-        }
+        prefs = get_preferences()
 
         if not check_ollama_available(prefs):
             self._set_status(
-                "Ollama unavailable — using algorithmic results only", "#e67e22")
+                "Ollama unavailable \u2014 using algorithmic results only", "#e67e22")
             return
 
         self._set_status(
@@ -452,8 +451,9 @@ class SmartSelectDialog(QtWidgets.QDialog):
 
             self.lbl_description.setText(self.analysis.ai_description or "(no description)")
             self.lbl_strategy.setText(strategy or "(no strategy)")
+            prefs = get_preferences()
             self._set_status(
-                f"Ollama analysis complete ({self.combo_model.currentText()})",
+                f"Ollama analysis complete ({prefs['model']})",
                 "#27ae60")
 
             self._populate_filters()
@@ -873,12 +873,10 @@ class SmartSelectDialog(QtWidgets.QDialog):
         self._update_summary()
 
     def _reanalyze(self):
-        prefs = {
-            "url": self.txt_url.text(),
-            "model": self.combo_model.currentText(),
-            "enabled": self.chk_ai.isChecked(),
-        }
+        prefs = get_preferences()
+        prefs["enabled"] = self.chk_ai.isChecked()
         save_preferences(prefs)
+        self._update_model_badge(prefs)
         self._run_analysis()
 
     # ── Result ────────────────────────────────────────────────────
