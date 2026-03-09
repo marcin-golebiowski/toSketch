@@ -186,6 +186,7 @@ def query_ollama(prompt, prefs=None):
         "model": prefs["model"],
         "prompt": prompt,
         "stream": False,
+        "think": True,
         "format": "json",
     }
     system_prompt = prefs.get("system_prompt", _DEFAULTS["system_prompt"])

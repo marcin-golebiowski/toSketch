@@ -180,7 +180,11 @@ class toSketchFeature:
                      #print(face.TypeId)
                      #print(face.ShapeType)
                      #print(sel.FullName)
-                     sketch.Support = [(sel.FullName[0],sel.FullName[1][0])]
+                     support = [(sel.FullName[0], sel.FullName[1][0])]
+                     if hasattr(sketch, 'AttachmentSupport'):
+                         sketch.AttachmentSupport = support
+                     else:
+                         sketch.Support = support
                      nVector = face.normalAt(1,1)
                      pVector = face.findPlane().Position
                      dVector = nVector.multiply(nVector.dot(pVector))
@@ -343,9 +347,10 @@ class toSketchFeature:
         print(f'shapes2sketch {name}{len(shapes)}')
         if len(shapes) > 0:
             # Use shared function
-            shapes2Sketch(shapes, name, auto=False)
+            return shapes2Sketch(shapes, name, auto=False)
         else:
             print(f"No shapes for sketch")
+            return None
 
 
 class removeOuterBoxFeature:

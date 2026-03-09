@@ -80,6 +80,7 @@ class OllamaWorker(QtCore.QThread):
                 "model": self.prefs["model"],
                 "prompt": self.prompt,
                 "stream": True,
+                "think": True,
                 "format": "json",
             }
             system_prompt = self.prefs.get("system_prompt", "")
@@ -156,13 +157,14 @@ class SmartSelectDialog(QtWidgets.QDialog):
 
     # Column indices
     COL_CHECK = 0
-    COL_SCORE = 1
-    COL_NAME = 2
-    COL_GROUP = 3
-    COL_TYPE = 4
-    COL_AREA = 5
-    COL_EDGES = 6
-    COL_NORMAL = 7
+    COL_INDEX = 1
+    COL_SCORE = 2
+    COL_NAME = 3
+    COL_GROUP = 4
+    COL_TYPE = 5
+    COL_AREA = 6
+    COL_EDGES = 7
+    COL_NORMAL = 8
 
     def __init__(self, shape, obj=None, parent=None):
         super().__init__(parent)
@@ -287,12 +289,12 @@ class SmartSelectDialog(QtWidgets.QDialog):
 
         # ── Face Table ──
         self.table = QtWidgets.QTableWidget()
-        self.table.setColumnCount(8)
+        self.table.setColumnCount(9)
         self.table.setHorizontalHeaderLabels([
-            "", "Score", "AI Name", "Group", "Type", "Area (mm\u00b2)", "Edges", "Normal"
+            "", "#", "Score", "AI Name", "Group", "Type", "Area (mm\u00b2)", "Edges", "Normal"
         ])
         self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
-        self.table.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
+        self.table.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
         self.table.setSortingEnabled(True)
         self.table.setAlternatingRowColors(True)
         self.table.setStyleSheet(
@@ -306,6 +308,8 @@ class SmartSelectDialog(QtWidgets.QDialog):
         header.setStretchLastSection(True)
         header.setSectionResizeMode(self.COL_CHECK, QtWidgets.QHeaderView.Fixed)
         header.resizeSection(self.COL_CHECK, 30)
+        header.setSectionResizeMode(self.COL_INDEX, QtWidgets.QHeaderView.Fixed)
+        header.resizeSection(self.COL_INDEX, 40)
         header.setSectionResizeMode(self.COL_SCORE, QtWidgets.QHeaderView.Fixed)
         header.resizeSection(self.COL_SCORE, 80)
 
@@ -348,6 +352,16 @@ class SmartSelectDialog(QtWidgets.QDialog):
         btn_invert = QtWidgets.QPushButton(" Invert")
         btn_invert.clicked.connect(self._invert_selection)
         btn_layout.addWidget(btn_invert)
+
+        btn_check_sel = QtWidgets.QPushButton(" Check Highlighted")
+        btn_check_sel.setToolTip("Check highlighted rows (Space)")
+        btn_check_sel.clicked.connect(self._check_highlighted)
+        btn_layout.addWidget(btn_check_sel)
+
+        btn_uncheck_sel = QtWidgets.QPushButton(" Uncheck Highlighted")
+        btn_uncheck_sel.setToolTip("Uncheck highlighted rows")
+        btn_uncheck_sel.clicked.connect(self._uncheck_highlighted)
+        btn_layout.addWidget(btn_uncheck_sel)
 
         sep = QtWidgets.QFrame()
         sep.setFrameShape(QtWidgets.QFrame.VLine)
@@ -550,7 +564,13 @@ class SmartSelectDialog(QtWidgets.QDialog):
             f"Querying Ollama ({prefs['model']})...", "#2980b9")
         self.progress.setVisible(True)
 
-        prompt = build_prompt(self.analysis.faces, self.analysis.groups)
+        selected_indices = set(self.get_selected_faces())
+        if selected_indices:
+            faces = [fi for fi in self.analysis.faces
+                     if fi.index in selected_indices]
+        else:
+            faces = self.analysis.faces
+        prompt = build_prompt(faces, self.analysis.groups)
         context = self.txt_ai_context.text().strip()
         if context:
             prompt = f"Additional context about this part: {context}\n\n{prompt}"
@@ -722,6 +742,13 @@ class SmartSelectDialog(QtWidgets.QDialog):
                 QtCore.Qt.Checked if fi.index in checked
                 else QtCore.Qt.Unchecked)
             self.table.setItem(row, self.COL_CHECK, chk)
+
+            # Index
+            idx_item = QtWidgets.QTableWidgetItem()
+            idx_item.setData(QtCore.Qt.DisplayRole, fi.index)
+            idx_item.setTextAlignment(QtCore.Qt.AlignCenter)
+            idx_item.setForeground(QtGui.QColor("#888"))
+            self.table.setItem(row, self.COL_INDEX, idx_item)
 
             # Score — use cell widget for color bar
             score_item = QtWidgets.QTableWidgetItem()
@@ -987,6 +1014,37 @@ class SmartSelectDialog(QtWidgets.QDialog):
                         else QtCore.Qt.Checked)
             item.setCheckState(new_state)
         self._update_summary()
+
+    def _get_highlighted_rows(self):
+        """Get unique row indices from the table's current selection."""
+        return sorted(set(idx.row() for idx in self.table.selectedIndexes()))
+
+    def _check_highlighted(self):
+        for row in self._get_highlighted_rows():
+            self.table.item(row, self.COL_CHECK).setCheckState(
+                QtCore.Qt.Checked)
+        self._update_summary()
+
+    def _uncheck_highlighted(self):
+        for row in self._get_highlighted_rows():
+            self.table.item(row, self.COL_CHECK).setCheckState(
+                QtCore.Qt.Unchecked)
+        self._update_summary()
+
+    def _toggle_highlighted(self):
+        for row in self._get_highlighted_rows():
+            item = self.table.item(row, self.COL_CHECK)
+            new_state = (QtCore.Qt.Unchecked
+                        if item.checkState() == QtCore.Qt.Checked
+                        else QtCore.Qt.Checked)
+            item.setCheckState(new_state)
+        self._update_summary()
+
+    def keyPressEvent(self, event):
+        if event.key() == QtCore.Qt.Key_Space and self._get_highlighted_rows():
+            self._toggle_highlighted()
+            return
+        super().keyPressEvent(event)
 
     def _select_ai_recommended(self):
         if not self.analysis:
