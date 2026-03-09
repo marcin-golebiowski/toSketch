@@ -8,9 +8,13 @@ This document describes the code structure of the toSketch workbench for develop
 freecad/toSketch/
 ├── __init__.py                    Package init
 ├── init_gui.py                    Workbench registration, toolbar, and menu setup
-├── toSCommands.py                 All GUI command implementations (~1970 lines)
+├── toSCommands.py                 All GUI command implementations (~2050 lines)
 ├── toSObjects.py                  Custom FeaturePython objects (~380 lines)
 ├── toSharedFunc.py                Shared utility functions (~295 lines)
+├── faceAnalysis.py                Algorithmic face scoring, grouping, and duplicate detection
+├── smartSelectDialog.py           AI-assisted face selection dialog with direct sketch creation
+├── ollamaClient.py                Ollama REST API client (preferences, prompts, annotations)
+├── ollamaConfigDialog.py          Ollama configuration UI (model, temperature, system prompt)
 ├── addCoincidentConstraints.py    Coincident constraint detection
 ├── addHorizontalConstraints.py    Horizontal constraint detection
 ├── addVerticalConstraints.py      Vertical constraint detection
@@ -48,6 +52,8 @@ Commands are registered in `Initialize()` via `FreeCADGui.addCommand()`:
 | `toScale` | `toScaleFeature` | Scale objects |
 | `toResetOrigin` | `toResetOriginFeature` | Fix origin placement |
 | `addConstraints` | `ConstraintsGroupFeature` | Constraint command group |
+| `SmartSelect` | `SmartSelectFeature` | AI-assisted face selection and sketch creation |
+| `OllamaConfig` | `OllamaConfigFeature` | Ollama AI configuration dialog |
 
 ### Toolbar Layout
 
@@ -150,6 +156,64 @@ Each constraint module exports a main function that takes a sketch and applies c
 | `symmetricConstraints` | `check_symmetry(sketch)` | ~1e-5 |
 
 The symmetry module is more complex -- it tests symmetry about X-axis, Y-axis, and each construction line, showing a preview dialog before applying.
+
+## AI-Assisted Face Selection (Smart Select)
+
+The Smart Select feature uses a multi-stage pipeline:
+
+### Data Flow
+
+```
+Shape → faceAnalysis.py → FaceInfo[] → ollamaClient.py → Ollama API
+                                              ↓
+                          smartSelectDialog.py ← annotated FaceInfo[]
+                                              ↓
+                                    Draft.makeSketch() → Named Sketches
+```
+
+### Key Data Structures
+
+**FaceInfo** (`faceAnalysis.py`) stores per-face data:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `algo_score` | float | Algorithmic score 0–100 |
+| `ai_sketch_score` | float | AI sketch priority 0–100 (-1 = not scored) |
+| `ai_sketch_name` | str | Suggested sketch name from AI (CamelCase) |
+| `ai_name` | str | Descriptive face name from AI |
+| `ai_group` | str | Functional group from AI |
+| `ai_recommended` | bool | True if sketch_score >= 60 |
+
+### Ollama Prompt Schema
+
+The prompt requests per-face JSON annotations:
+
+```json
+{
+  "face_annotations": [{
+    "index": 0,
+    "name": "descriptive name",
+    "group": "functional group",
+    "sketch_score": 85,
+    "sketch_name": "TopProfile",
+    "reason": "why this score"
+  }],
+  "part_description": "...",
+  "extraction_strategy": "..."
+}
+```
+
+Score blending: `combined = 0.4 * algo_score + 0.6 * ai_sketch_score`
+
+### Sketch Creation
+
+`SmartSelectDialog._on_create_sketches()` creates sketches directly:
+
+1. Iterates checked faces ordered by score (highest first)
+2. Skips non-planar faces with a warning
+3. Creates each sketch via `Draft.makeSketch()` with the AI/user-provided name
+4. Attaches each sketch to its source face (`FlatFace` map mode)
+5. Positions the sketch at the face's plane location
 
 ## Curve Fitting Pipeline
 
