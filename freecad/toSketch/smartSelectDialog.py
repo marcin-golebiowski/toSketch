@@ -159,12 +159,13 @@ class SmartSelectDialog(QtWidgets.QDialog):
     COL_CHECK = 0
     COL_INDEX = 1
     COL_SCORE = 2
-    COL_NAME = 3
-    COL_GROUP = 4
-    COL_TYPE = 5
-    COL_AREA = 6
-    COL_EDGES = 7
-    COL_NORMAL = 8
+    COL_SKETCH_NAME = 3
+    COL_NAME = 4
+    COL_GROUP = 5
+    COL_TYPE = 6
+    COL_AREA = 7
+    COL_EDGES = 8
+    COL_NORMAL = 9
 
     def __init__(self, shape, obj=None, parent=None):
         super().__init__(parent)
@@ -289,9 +290,10 @@ class SmartSelectDialog(QtWidgets.QDialog):
 
         # ── Face Table ──
         self.table = QtWidgets.QTableWidget()
-        self.table.setColumnCount(9)
+        self.table.setColumnCount(10)
         self.table.setHorizontalHeaderLabels([
-            "", "#", "Score", "AI Name", "Group", "Type", "Area (mm\u00b2)", "Edges", "Normal"
+            "", "#", "Score", "Sketch Name", "AI Name", "Group",
+            "Type", "Area (mm\u00b2)", "Edges", "Normal",
         ])
         self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
@@ -313,7 +315,10 @@ class SmartSelectDialog(QtWidgets.QDialog):
         header.setSectionResizeMode(self.COL_SCORE, QtWidgets.QHeaderView.Fixed)
         header.resizeSection(self.COL_SCORE, 80)
 
-        self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        # Allow editing only the Sketch Name column (COL_SKETCH_NAME)
+        self.table.setEditTriggers(
+            QtWidgets.QAbstractItemView.DoubleClicked
+            | QtWidgets.QAbstractItemView.EditKeyPressed)
         self.table.horizontalHeader().setVisible(True)
         self.table.verticalHeader().setVisible(False)
         self.table.itemSelectionChanged.connect(self._on_table_selection_changed)
@@ -467,15 +472,15 @@ class SmartSelectDialog(QtWidgets.QDialog):
         status_layout.addWidget(self.lbl_statusbar)
         status_layout.addStretch()
 
-        btn_create = QtWidgets.QPushButton("  Create Sketches")
-        btn_create.setDefault(True)
-        btn_create.setStyleSheet(
+        self.btn_create = QtWidgets.QPushButton("  Create Sketches")
+        self.btn_create.setDefault(True)
+        self.btn_create.setStyleSheet(
             "QPushButton { background: #27ae60; color: white; padding: 6px 20px; "
             "border-radius: 4px; font-weight: bold; font-size: 13px; }"
             "QPushButton:hover { background: #2ecc71; }"
             "QPushButton:disabled { background: #bdc3c7; }")
-        btn_create.clicked.connect(self.accept)
-        status_layout.addWidget(btn_create)
+        self.btn_create.clicked.connect(self._on_create_sketches)
+        status_layout.addWidget(self.btn_create)
 
         btn_cancel = QtWidgets.QPushButton("Cancel")
         btn_cancel.setStyleSheet(
@@ -599,6 +604,8 @@ class SmartSelectDialog(QtWidgets.QDialog):
 
             self._populate_filters()
             self._populate_table()
+            # Sort by score descending so best sketch candidates appear first
+            self.table.sortItems(self.COL_SCORE, QtCore.Qt.DescendingOrder)
             self._apply_threshold(self.spin_threshold.value())
         else:
             self._set_status("Ollama returned no results", "#e74c3c")
@@ -748,6 +755,7 @@ class SmartSelectDialog(QtWidgets.QDialog):
             idx_item.setData(QtCore.Qt.DisplayRole, fi.index)
             idx_item.setTextAlignment(QtCore.Qt.AlignCenter)
             idx_item.setForeground(QtGui.QColor("#888"))
+            idx_item.setFlags(idx_item.flags() & ~QtCore.Qt.ItemIsEditable)
             self.table.setItem(row, self.COL_INDEX, idx_item)
 
             # Score — use cell widget for color bar
@@ -759,10 +767,33 @@ class SmartSelectDialog(QtWidgets.QDialog):
             bg.setAlpha(60)
             score_item.setBackground(bg)
             score_item.setTextAlignment(QtCore.Qt.AlignCenter)
+            score_item.setFlags(score_item.flags() & ~QtCore.Qt.ItemIsEditable)
+            # Show AI sketch score in tooltip if available
+            if fi.ai_sketch_score >= 0:
+                score_item.setToolTip(
+                    f"Combined: {int(fi.algo_score)}  |  "
+                    f"AI sketch: {int(fi.ai_sketch_score)}  |  "
+                    f"Algo: {int(fi.algo_score - fi.ai_score_boost * 0.6)}")
             self.table.setItem(row, self.COL_SCORE, score_item)
+
+            # Sketch Name — editable by double-click
+            sketch_name = fi.ai_sketch_name or ""
+            sn_item = QtWidgets.QTableWidgetItem(sketch_name)
+            sn_item.setFlags(
+                sn_item.flags() | QtCore.Qt.ItemIsEditable)
+            if sketch_name:
+                sn_item.setForeground(QtGui.QColor("#2c3e50"))
+                font = sn_item.font()
+                font.setBold(True)
+                sn_item.setFont(font)
+            else:
+                sn_item.setForeground(QtGui.QColor("#bbb"))
+                sn_item.setText("(none)")
+            self.table.setItem(row, self.COL_SKETCH_NAME, sn_item)
 
             # AI Name — bold if AI-recommended
             name_item = QtWidgets.QTableWidgetItem(fi.ai_name or f"Face {fi.index}")
+            name_item.setFlags(name_item.flags() & ~QtCore.Qt.ItemIsEditable)
             if fi.ai_recommended:
                 font = name_item.font()
                 font.setBold(True)
@@ -778,24 +809,28 @@ class SmartSelectDialog(QtWidgets.QDialog):
                     if fi.index in indices:
                         group_text = g
                         break
-            self.table.setItem(row, self.COL_GROUP,
-                QtWidgets.QTableWidgetItem(group_text or "\u2014"))
+            group_item = QtWidgets.QTableWidgetItem(group_text or "\u2014")
+            group_item.setFlags(group_item.flags() & ~QtCore.Qt.ItemIsEditable)
+            self.table.setItem(row, self.COL_GROUP, group_item)
 
             # Surface type with icon
             icon = _TYPE_ICONS.get(fi.surface_type, "")
             type_item = QtWidgets.QTableWidgetItem(f"{icon} {fi.surface_type}")
+            type_item.setFlags(type_item.flags() & ~QtCore.Qt.ItemIsEditable)
             self.table.setItem(row, self.COL_TYPE, type_item)
 
             # Area
             area_item = QtWidgets.QTableWidgetItem()
             area_item.setData(QtCore.Qt.DisplayRole, round(fi.area, 1))
             area_item.setTextAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+            area_item.setFlags(area_item.flags() & ~QtCore.Qt.ItemIsEditable)
             self.table.setItem(row, self.COL_AREA, area_item)
 
             # Edges
             edge_item = QtWidgets.QTableWidgetItem()
             edge_item.setData(QtCore.Qt.DisplayRole, fi.edge_count)
             edge_item.setTextAlignment(QtCore.Qt.AlignCenter)
+            edge_item.setFlags(edge_item.flags() & ~QtCore.Qt.ItemIsEditable)
             self.table.setItem(row, self.COL_EDGES, edge_item)
 
             # Normal direction
@@ -803,6 +838,7 @@ class SmartSelectDialog(QtWidgets.QDialog):
             normal_item = QtWidgets.QTableWidgetItem(
                 f"({nx:.2f}, {ny:.2f}, {nz:.2f})")
             normal_item.setForeground(QtGui.QColor("#999"))
+            normal_item.setFlags(normal_item.flags() & ~QtCore.Qt.ItemIsEditable)
             self.table.setItem(row, self.COL_NORMAL, normal_item)
 
         self.table.setSortingEnabled(True)
@@ -1084,14 +1120,121 @@ class SmartSelectDialog(QtWidgets.QDialog):
         self._update_model_badge(prefs)
         self._run_analysis()
 
+    # ── Sketch Creation ─────────────────────────────────────────
+
+    def _on_create_sketches(self):
+        """Create sketches directly from selected faces."""
+        entries = self.get_selected_entries()
+        if not entries:
+            self._set_status("No faces selected", "#e74c3c")
+            return
+
+        if not self.obj:
+            # No FreeCAD object — just accept and let caller handle it
+            self.accept()
+            return
+
+        try:
+            import FreeCAD
+            import Draft
+        except ImportError:
+            # Not running inside FreeCAD — fall back to accept
+            self.accept()
+            return
+
+        created = []
+        for entry in entries:
+            face_idx = entry["index"]
+            sketch_name = entry["sketch_name"]
+            face = self.shape.Faces[face_idx]
+
+            # Generate name: use AI sketch name, or fallback
+            if not sketch_name:
+                sketch_name = f"Sketch_Face{face_idx}"
+
+            # Only create sketches from planar faces
+            if str(face.Surface) != '<Plane object>':
+                FreeCAD.Console.PrintWarning(
+                    f"[SmartSelect] Skipping Face{face_idx + 1} "
+                    f"({sketch_name}): not planar\n")
+                continue
+
+            try:
+                # Translate face to origin for sketch creation
+                moved_face = face.copy()
+                moved_face.translate(face.Placement.Base.negative())
+
+                sketch = Draft.makeSketch(
+                    [moved_face], autoconstraints=False,
+                    addTo=None, delete=False, name=sketch_name,
+                    radiusPrecision=-1, tol=1e-3)
+
+                if sketch:
+                    # Attach sketch to the original face
+                    sketch.MapMode = 'FlatFace'
+                    sketch.MapReversed = False
+                    support = [(self.obj, f"Face{face_idx + 1}")]
+                    if hasattr(sketch, 'AttachmentSupport'):
+                        sketch.AttachmentSupport = support
+                    else:
+                        sketch.Support = support
+
+                    # Position sketch at face location
+                    n = face.normalAt(
+                        *[(face.ParameterRange[i] + face.ParameterRange[i+1]) / 2.0
+                          for i in (0, 2)])
+                    p = face.findPlane().Position
+                    d = n.multiply(n.dot(p))
+                    sketch.Placement.move(d)
+
+                    created.append(sketch_name)
+                    FreeCAD.Console.PrintMessage(
+                        f"[SmartSelect] Created sketch '{sketch_name}' "
+                        f"from Face{face_idx + 1}\n")
+            except Exception as e:
+                FreeCAD.Console.PrintError(
+                    f"[SmartSelect] Failed to create sketch for "
+                    f"Face{face_idx + 1}: {e}\n")
+
+        if created:
+            FreeCAD.ActiveDocument.recompute()
+            self._set_status(
+                f"Created {len(created)} sketch(es): {', '.join(created)}",
+                "#27ae60")
+
+        self._created_sketches = created
+        self.accept()
+
     # ── Result ────────────────────────────────────────────────────
 
     def get_selected_faces(self):
-        selected = []
+        """Return list of selected face indices (for backward compat)."""
+        return [entry["index"] for entry in self.get_selected_entries()]
+
+    def get_selected_entries(self):
+        """Return list of dicts with index, sketch_name, score for each checked face.
+
+        Ordered by score descending (best sketch candidates first).
+        """
+        entries = []
         for row in range(self.table.rowCount()):
             item = self.table.item(row, self.COL_CHECK)
             if item and item.checkState() == QtCore.Qt.Checked:
                 score_item = self.table.item(row, self.COL_SCORE)
+                sn_item = self.table.item(row, self.COL_SKETCH_NAME)
                 if score_item:
-                    selected.append(int(score_item.data(QtCore.Qt.UserRole)))
-        return selected
+                    idx = int(score_item.data(QtCore.Qt.UserRole))
+                    score = int(score_item.data(QtCore.Qt.DisplayRole))
+                    sketch_name = ""
+                    if sn_item:
+                        text = sn_item.text().strip()
+                        if text and text != "(none)":
+                            sketch_name = text
+                    entries.append({
+                        "index": idx,
+                        "sketch_name": sketch_name,
+                        "score": score,
+                    })
+        # Sort by score descending
+        entries.sort(key=lambda e: e["score"], reverse=True)
+        return entries

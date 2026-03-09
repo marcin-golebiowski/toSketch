@@ -13,9 +13,20 @@ _DEFAULTS = {
     "enabled": True,
     "temperature": 0.3,
     "system_prompt": (
-        "You are a CAD geometry analyst. Given faces from a STEP file, "
-        "respond ONLY with valid JSON. Identify mounting faces, bore/hole "
-        "profiles, structural features, and the best faces for sketch extraction."
+        "You are a CAD geometry analyst specializing in sketch extraction from "
+        "STEP files. Your task is to evaluate each face and assign a sketch_score "
+        "(0-100) indicating how useful that face is for creating a 2D sketch.\n\n"
+        "High sketch_score criteria (70-100):\n"
+        "- Complex profiles: planar faces with many edges that capture the part's cross-section\n"
+        "- Feature-defining faces: holes, slots, pockets, mounting patterns\n"
+        "- Faces perpendicular to principal axes with meaningful geometry\n"
+        "- Unique faces (not duplicated elsewhere on the part)\n\n"
+        "Low sketch_score criteria (0-30):\n"
+        "- Simple rectangular/circular faces that are just enclosure walls\n"
+        "- Duplicate faces (e.g., matching pairs of identical fillets)\n"
+        "- Tiny chamfer or fillet faces with minimal geometric content\n"
+        "- Cylindrical/spherical faces that don't define useful profiles\n\n"
+        "Respond ONLY with valid JSON."
     ),
 }
 
@@ -141,11 +152,27 @@ def build_prompt(faces, groups):
         "",
         "Required JSON structure:",
         '{',
-        '  "face_annotations": [{"index": 0, "name": "descriptive name", "group": "group name"}, ...],',
-        '  "scoring_adjustments": [{"index": 0, "boost": 15, "reason": "why"}, ...],',
+        '  "face_annotations": [',
+        '    {',
+        '      "index": 0,',
+        '      "name": "descriptive name",',
+        '      "group": "functional group name",',
+        '      "sketch_score": 85,',
+        '      "sketch_name": "MainProfile_Top",',
+        '      "reason": "why this score - what makes this face good/bad for sketch extraction"',
+        '    }, ...',
+        '  ],',
         '  "part_description": "brief description of what this part appears to be",',
-        '  "extraction_strategy": "which faces to extract as sketches and why"',
+        '  "extraction_strategy": "overall strategy: which faces to prioritize for sketch extraction and why"',
         '}',
+        "",
+        "IMPORTANT: sketch_score (0-100) must reflect how valuable each face is for 2D sketch extraction.",
+        "Score high: complex profiles, feature-defining faces, cross-sections, mounting patterns.",
+        "Score low: simple walls, duplicate fillets, tiny chamfers, featureless cylinders.",
+        "",
+        "sketch_name: A concise, descriptive name for the sketch if this face were extracted.",
+        "Use CamelCase with no spaces, e.g. 'TopProfile', 'MountingHoles', 'BearingSeat', 'FrontCrossSection'.",
+        "For low-scoring faces that shouldn't become sketches, use an empty string.",
         "",
         "Faces:",
     ]
@@ -246,31 +273,52 @@ def apply_ollama_annotations(faces, ollama_result):
     if not ollama_result:
         return ""
 
-    # Apply face annotations (name, group)
+    # Apply face annotations (name, group, sketch_score)
     annotations = ollama_result.get("face_annotations", [])
     face_map = {fi.index: fi for fi in faces}
     for ann in annotations:
         idx = ann.get("index")
         if idx is not None and idx in face_map:
-            face_map[idx].ai_name = ann.get("name", "")
-            face_map[idx].ai_group = ann.get("group", "")
+            fi = face_map[idx]
+            fi.ai_name = ann.get("name", "")
+            fi.ai_group = ann.get("group", "")
+            fi.ai_sketch_name = ann.get("sketch_name", "")
 
-    # Apply scoring adjustments
+            # Apply sketch_score from AI
+            sketch_score = ann.get("sketch_score")
+            if sketch_score is not None:
+                fi.ai_sketch_score = max(0.0, min(100.0, float(sketch_score)))
+                # Blend AI sketch score into algo_score: 40% algo + 60% AI
+                fi.ai_score_boost = fi.ai_sketch_score - fi.algo_score
+                fi.algo_score = max(0.0, min(100.0,
+                    0.4 * fi.algo_score + 0.6 * fi.ai_sketch_score))
+
+    # Backward compat: also handle old-style scoring_adjustments
     adjustments = ollama_result.get("scoring_adjustments", [])
     for adj in adjustments:
         idx = adj.get("index")
         boost = adj.get("boost", 0)
         if idx is not None and idx in face_map:
-            face_map[idx].ai_score_boost = float(boost)
-            face_map[idx].algo_score = max(
-                0.0, min(100.0, face_map[idx].algo_score + float(boost)))
+            fi = face_map[idx]
+            # Only apply boost if no sketch_score was set for this face
+            if fi.ai_sketch_score < 0:
+                fi.ai_score_boost = float(boost)
+                fi.algo_score = max(
+                    0.0, min(100.0, fi.algo_score + float(boost)))
 
-    # Mark AI-recommended faces based on extraction strategy
-    strategy = ollama_result.get("extraction_strategy", "")
-    if strategy:
+    # Mark AI-recommended: faces with sketch_score >= 60
+    has_sketch_scores = any(fi.ai_sketch_score >= 0 for fi in faces)
+    if has_sketch_scores:
         for fi in faces:
-            # Simple heuristic: if face index is mentioned in strategy text
-            if f"face {fi.index}" in strategy.lower() or f"face{fi.index}" in strategy.lower():
+            if fi.ai_sketch_score >= 60:
                 fi.ai_recommended = True
+    else:
+        # Fallback: check extraction strategy text for face mentions
+        strategy = ollama_result.get("extraction_strategy", "")
+        if strategy:
+            for fi in faces:
+                if (f"face {fi.index}" in strategy.lower()
+                        or f"face{fi.index}" in strategy.lower()):
+                    fi.ai_recommended = True
 
-    return strategy
+    return ollama_result.get("extraction_strategy", "")

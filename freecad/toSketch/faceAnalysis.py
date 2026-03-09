@@ -20,6 +20,8 @@ class FaceInfo:
     ai_name: str = ""
     ai_group: str = ""
     ai_score_boost: float = 0.0
+    ai_sketch_score: float = -1.0  # -1 = not scored by AI; 0-100 = sketch priority
+    ai_sketch_name: str = ""  # suggested sketch name from AI
     ai_recommended: bool = False
 
 

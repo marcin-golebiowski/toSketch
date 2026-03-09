@@ -2016,13 +2016,21 @@ class SmartSelectFeature:
 
         dialog = SmartSelectDialog(obj.Shape, obj=obj)
         if dialog.exec_() == QtWidgets.QDialog.Accepted:
+            # Sketches are created directly by the dialog.
+            # Also select the faces for any follow-up operations.
+            created = getattr(dialog, '_created_sketches', [])
             selected = dialog.get_selected_faces()
             FreeCADGui.Selection.clearSelection()
             for idx in selected:
                 FreeCADGui.Selection.addSelection(
                     obj, f"Face{idx + 1}")
-            FreeCAD.Console.PrintMessage(
-                f"Selected {len(selected)} face(s) for sketch extraction\n")
+            if created:
+                FreeCAD.Console.PrintMessage(
+                    f"Created {len(created)} sketch(es): "
+                    f"{', '.join(created)}\n")
+            else:
+                FreeCAD.Console.PrintMessage(
+                    f"Selected {len(selected)} face(s) for sketch extraction\n")
 
     def IsActive(self):
         if FreeCAD.ActiveDocument is None:

@@ -183,7 +183,51 @@ class TestApplyAnnotations:
         assert faces[0].ai_group == "Plates"
         assert faces[1].ai_name == "Side wall"
 
-    def test_apply_scoring_boost(self):
+    def test_apply_sketch_score(self):
+        faces = [_make_face_info(0, score=50.0)]
+        result = {
+            "face_annotations": [
+                {"index": 0, "name": "Top plate", "group": "Plates",
+                 "sketch_score": 90, "sketch_name": "TopProfile",
+                 "reason": "Complex profile"}
+            ],
+            "extraction_strategy": "",
+        }
+        apply_ollama_annotations(faces, result)
+        assert faces[0].ai_sketch_score == 90.0
+        assert faces[0].ai_sketch_name == "TopProfile"
+        # Blended: 0.4 * 50 + 0.6 * 90 = 74
+        assert faces[0].algo_score == 74.0
+        assert faces[0].ai_recommended is True
+
+    def test_sketch_name_empty_for_low_score(self):
+        faces = [_make_face_info(0, score=50.0)]
+        result = {
+            "face_annotations": [
+                {"index": 0, "name": "Wall", "group": "Walls",
+                 "sketch_score": 15, "sketch_name": "",
+                 "reason": "Simple wall"}
+            ],
+            "extraction_strategy": "",
+        }
+        apply_ollama_annotations(faces, result)
+        assert faces[0].ai_sketch_name == ""
+
+    def test_sketch_score_low_not_recommended(self):
+        faces = [_make_face_info(0, score=50.0)]
+        result = {
+            "face_annotations": [
+                {"index": 0, "name": "Simple wall", "group": "Walls",
+                 "sketch_score": 20, "reason": "Featureless"}
+            ],
+            "extraction_strategy": "",
+        }
+        apply_ollama_annotations(faces, result)
+        assert faces[0].ai_sketch_score == 20.0
+        assert faces[0].ai_recommended is False
+
+    def test_legacy_scoring_boost_fallback(self):
+        """Old-style scoring_adjustments still work when no sketch_score."""
         faces = [_make_face_info(0, score=50.0)]
         result = {
             "face_annotations": [],
@@ -194,20 +238,40 @@ class TestApplyAnnotations:
         assert faces[0].algo_score == 70.0
         assert faces[0].ai_score_boost == 20.0
 
-    def test_score_clamped_to_range(self):
-        faces = [_make_face_info(0, score=95.0)]
+    def test_sketch_score_clamped_to_range(self):
+        faces = [_make_face_info(0, score=50.0)]
         result = {
-            "face_annotations": [],
-            "scoring_adjustments": [{"index": 0, "boost": 20}],
+            "face_annotations": [
+                {"index": 0, "name": "X", "group": "Y",
+                 "sketch_score": 150, "reason": "overflow"}
+            ],
             "extraction_strategy": "",
         }
         apply_ollama_annotations(faces, result)
-        assert faces[0].algo_score == 100.0
+        assert faces[0].ai_sketch_score == 100.0
 
-    def test_ai_recommended_from_strategy(self):
+    def test_ai_recommended_from_sketch_score(self):
         faces = [_make_face_info(0), _make_face_info(1)]
         result = {
-            "face_annotations": [],
+            "face_annotations": [
+                {"index": 0, "name": "Profile", "group": "Main",
+                 "sketch_score": 85, "reason": "Complex profile"},
+                {"index": 1, "name": "Wall", "group": "Walls",
+                 "sketch_score": 25, "reason": "Simple"},
+            ],
+            "extraction_strategy": "Focus on face 0",
+        }
+        apply_ollama_annotations(faces, result)
+        assert faces[0].ai_recommended is True
+        assert faces[1].ai_recommended is False
+
+    def test_ai_recommended_fallback_to_strategy_text(self):
+        """When no sketch_scores, fall back to strategy text parsing."""
+        faces = [_make_face_info(0), _make_face_info(1)]
+        result = {
+            "face_annotations": [
+                {"index": 0, "name": "Top", "group": "Plates"},
+            ],
             "scoring_adjustments": [],
             "extraction_strategy": "Extract Face 0 for the main profile",
         }
